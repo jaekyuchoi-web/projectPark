@@ -103,6 +103,14 @@ chmod +x deploy.sh
 기본값: 프로젝트 `hg-affiliate`, 리전 `asia-southeast1`, 서비스 `hg-affiliate-runtime`.
 환경변수로 `GCP_PROJECT`, `GCP_REGION`, `GCP_SERVICE` 를 덮어쓸 수 있습니다.
 
+배포 후 접속 주소:
+
+- **https://hg-affiliate.web.app** (Firebase Hosting → Cloud Run rewrite)
+- Cloud Run 직접 URL (`deploy.sh` 마지막에 출력)
+
+`firebase.json`(저장소 루트)이 `hg-affiliate-runtime` 으로 모든 요청을 프록시합니다.
+Hosting만 다시 배포하려면 저장소 루트에서 `firebase deploy --only hosting` 을 실행하세요.
+
 ## 구조
 
 ```

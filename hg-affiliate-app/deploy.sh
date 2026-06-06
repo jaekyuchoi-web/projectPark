@@ -42,6 +42,14 @@ gcloud run deploy "${SERVICE}" \
   --allow-unauthenticated \
   --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY},OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}"
 
+echo "==> Firebase Hosting (https://hg-affiliate.web.app) 연결"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if command -v firebase >/dev/null 2>&1; then
+  (cd "${REPO_ROOT}" && firebase deploy --only hosting --project "${PROJECT}" --non-interactive)
+else
+  echo "경고: firebase CLI 가 없어 Hosting 배포를 건너뜁니다. npm i -g firebase-tools 후 재실행하세요."
+fi
+
 echo "==> 완료"
-gcloud run services describe "${SERVICE}" --project "${PROJECT}" --region "${REGION}" \
-  --format='value(status.url)'
+echo "Cloud Run: $(gcloud run services describe "${SERVICE}" --project "${PROJECT}" --region "${REGION}" --format='value(status.url)')"
+echo "웹 주소: https://hg-affiliate.web.app"

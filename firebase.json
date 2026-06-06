@@ -1,0 +1,16 @@
+{
+  "hosting": {
+    "site": "hg-affiliate",
+    "public": "hosting/public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "hg-affiliate-runtime",
+          "region": "asia-southeast1"
+        }
+      }
+    ]
+  }
+}
