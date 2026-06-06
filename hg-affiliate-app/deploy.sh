@@ -24,8 +24,8 @@ set -a
 source secret.env
 set +a
 
-echo "==> Docker 빌드: ${IMAGE}:${TAG}"
-docker build -t "${IMAGE}:${TAG}" .
+echo "==> Docker 빌드 (linux/amd64): ${IMAGE}:${TAG}"
+docker build --platform linux/amd64 -t "${IMAGE}:${TAG}" .
 
 echo "==> Artifact Registry 푸시"
 docker push "${IMAGE}:${TAG}"
