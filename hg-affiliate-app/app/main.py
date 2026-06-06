@@ -1,0 +1,202 @@
+"""FastAPI 진입점 및 라우트.
+
+UX 흐름(§2): 설정 안내 → 업로드(검증) → 분류 확인 → 실행 → 다운로드.
+입력/출력 '내용'은 어떤 응답에도 담지 않는다. (파일명/종류/뱃지/건수만)
+"""
+
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.requests import Request
+
+from .classifier import classify
+from .config import SLOT_KEYS, SLOT_LABELS, load_settings
+from .pipeline import run_pipeline
+from .session import store
+from .validation import validate_file
+
+BASE_DIR = Path(__file__).resolve().parent
+app = FastAPI(title="HLB글로벌 특관자 명세서 생성기", version="2.0.0")
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    settings = load_settings()
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "has_key": settings.has_openai_key,
+            "model": settings.openai_model,
+            "slots": [{"key": k, "label": SLOT_LABELS[k]} for k in SLOT_KEYS],
+        },
+    )
+
+
+@app.get("/api/config")
+def api_config():
+    settings = load_settings()
+    return {"has_key": settings.has_openai_key, "model": settings.openai_model}
+
+
+@app.post("/api/session")
+def api_session():
+    sess = store.create()
+    sess.meta.setdefault("files", {})
+    sess.meta.setdefault("assign", {})
+    return {"sid": sess.sid}
+
+
+@app.post("/api/upload")
+async def api_upload(sid: str = Form(...), file: UploadFile = File(...)):
+    sess = store.get(sid)
+    if sess is None:
+        raise HTTPException(404, "세션을 찾을 수 없습니다. 새로고침 후 다시 시도하세요.")
+
+    original = file.filename or "uploaded"
+    file_id = uuid.uuid4().hex
+    dest = sess.upload_dir / f"{file_id}{Path(original).suffix.lower()}"
+    content = await file.read()
+    dest.write_bytes(content)
+
+    # 선행 검증 (a)
+    v = validate_file(dest, original)
+    suggested = None
+    if v.ok:
+        suggested = classify(dest, original).slot
+    else:
+        dest.unlink(missing_ok=True)
+
+    info = {
+        "file_id": file_id,
+        "filename": original,
+        "ext": v.ext,
+        "valid": v.ok,
+        "reasons": v.reasons,
+        "suggested_slot": suggested,
+        "path": str(dest) if v.ok else "",
+    }
+    sess.meta["files"][file_id] = info
+
+    # 자동 분류로 슬롯 자동 배정(빈 슬롯일 때만)
+    if v.ok and suggested and suggested not in sess.meta["assign"]:
+        sess.meta["assign"][suggested] = file_id
+
+    # 화면에는 파일명/종류/뱃지/제안슬롯만 (내용 비표시)
+    return {
+        "file_id": file_id,
+        "filename": original,
+        "ext": v.ext,
+        "valid": v.ok,
+        "reasons": v.reasons,
+        "suggested_slot": suggested,
+        "suggested_label": SLOT_LABELS.get(suggested) if suggested else None,
+        "assign": sess.meta["assign"],
+    }
+
+
+@app.delete("/api/file/{sid}/{file_id}")
+def api_file_delete(sid: str, file_id: str):
+    """업로드한 파일 1건 삭제 (디스크/메타/슬롯배정에서 제거)."""
+    sess = store.get(sid)
+    if sess is None:
+        raise HTTPException(404, "세션을 찾을 수 없습니다.")
+
+    info = sess.meta.get("files", {}).pop(file_id, None)
+    if info is None:
+        raise HTTPException(404, "삭제할 파일을 찾을 수 없습니다.")
+
+    # 디스크 파일 제거
+    path = info.get("path")
+    if path:
+        Path(path).unlink(missing_ok=True)
+
+    # 이 파일을 가리키던 슬롯 배정 제거
+    assign = sess.meta.get("assign", {})
+    for slot in [s for s, fid in assign.items() if fid == file_id]:
+        assign.pop(slot, None)
+
+    return {"ok": True, "file_id": file_id, "assign": assign}
+
+
+@app.post("/api/assign")
+async def api_assign(request: Request):
+    body = await request.json()
+    sid = body.get("sid")
+    assign = body.get("assign", {})
+    sess = store.get(sid)
+    if sess is None:
+        raise HTTPException(404, "세션을 찾을 수 없습니다.")
+    # slot -> file_id 매핑 검증(존재하는 file 만)
+    clean: dict[str, str] = {}
+    for slot, file_id in assign.items():
+        if slot in SLOT_KEYS and file_id and file_id in sess.meta["files"]:
+            if sess.meta["files"][file_id]["valid"]:
+                clean[slot] = file_id
+    sess.meta["assign"] = clean
+    return {"assign": clean}
+
+
+@app.post("/api/run")
+async def api_run(request: Request):
+    body = await request.json()
+    sid = body.get("sid")
+    sess = store.get(sid)
+    if sess is None:
+        raise HTTPException(404, "세션을 찾을 수 없습니다.")
+
+    assign: dict[str, str] = sess.meta.get("assign", {})
+    files: dict[str, dict] = sess.meta.get("files", {})
+
+    # 필수 슬롯 점검: 최소한 당기말 잔액(검증용)은 있어야 함
+    slot_paths: dict[str, Path | None] = {}
+    for slot in SLOT_KEYS:
+        fid = assign.get(slot)
+        slot_paths[slot] = Path(files[fid]["path"]) if fid and files.get(fid, {}).get("path") else None
+
+    if slot_paths.get("current_balance") is None:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "message": "필수 입력(당기 채권채무 잔액 검증용 소스)이 없습니다. 슬롯을 지정하세요."},
+        )
+
+    settings = load_settings()
+    outcome = run_pipeline(slot_paths, settings, sess.output_dir)
+    sess.outputs = dict(outcome.outputs)
+
+    downloads = [
+        {"name": name, "url": f"/download/{sid}/{name}"}
+        for name in outcome.outputs
+    ]
+    return {
+        "ok": outcome.ok,
+        "message": outcome.message,
+        "error_count": outcome.error_count,
+        "downloads": downloads,
+    }
+
+
+@app.get("/download/{sid}/{name}")
+def download(sid: str, name: str):
+    sess = store.get(sid)
+    if sess is None or name not in sess.outputs:
+        raise HTTPException(404, "다운로드할 파일을 찾을 수 없습니다.")
+    path = sess.outputs[name]
+    if not path.exists():
+        raise HTTPException(404, "파일이 만료되었거나 삭제되었습니다.")
+    return FileResponse(path, filename=path.name,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.delete("/api/session/{sid}")
+def api_session_delete(sid: str):
+    store.delete(sid)
+    return {"ok": True}

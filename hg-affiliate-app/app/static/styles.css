@@ -1,0 +1,17 @@
+/* 보조 스타일 (Tailwind CDN 보강) */
+#dropzone.dragover {
+  border-color: #6366f1;
+  background-color: #eef2ff;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.badge-ok { background: #dcfce7; color: #166534; }
+.badge-fail { background: #fee2e2; color: #991b1b; }

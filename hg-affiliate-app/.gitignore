@@ -1,0 +1,21 @@
+# 비밀값 (절대 커밋 금지)
+secret.env
+
+# 명세서 고정 템플릿(실제 거래 데이터 포함 '정답' 파일 — 절대 커밋 금지)
+app/assets/statement_template.xlsx
+
+# 파이썬
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# 세션/임시 작업 디렉터리 (업로드·출력 파일은 만료 삭제)
+.sessions/
+*.tmp
+
+# OS / 에디터
+.DS_Store
+.idea/
+.vscode/
