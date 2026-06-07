@@ -30,6 +30,13 @@ docker build --platform linux/amd64 -t "${IMAGE}:${TAG}" .
 echo "==> Artifact Registry 푸시"
 docker push "${IMAGE}:${TAG}"
 
+RUN_URL="$(gcloud run services describe "${SERVICE}" \
+  --project "${PROJECT}" --region "${REGION}" \
+  --format='value(status.url)' 2>/dev/null || true)"
+if [[ -z "${RUN_URL}" ]]; then
+  RUN_URL="https://${SERVICE}-${PROJECT}.asia-southeast1.run.app"
+fi
+
 echo "==> Cloud Run 배포: ${SERVICE} (${REGION})"
 gcloud run deploy "${SERVICE}" \
   --project "${PROJECT}" \
@@ -39,8 +46,9 @@ gcloud run deploy "${SERVICE}" \
   --memory 2Gi \
   --cpu 1 \
   --timeout 300 \
+  --max-instances 1 \
   --allow-unauthenticated \
-  --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY},OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}"
+  --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY},OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini},PUBLIC_API_URL=${RUN_URL}"
 
 echo "==> Firebase Hosting (https://hg-affiliate.web.app) 연결"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

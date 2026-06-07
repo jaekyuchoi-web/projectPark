@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -19,10 +20,25 @@ from .classifier import classify
 from .config import SLOT_KEYS, SLOT_LABELS, load_settings
 from .pipeline import run_pipeline
 from .session import store
-from .validation import validate_file
+from .validation import validate_file_with_sheets
 
 BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="HLB글로벌 특관자 명세서 생성기", version="2.0.0")
+
+# web.app( Hosting ) 에서 Cloud Run API 직접 호출 허용
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://hg-affiliate.web.app",
+        "https://hg-affiliate.firebaseapp.com",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -36,6 +52,7 @@ def index(request: Request):
             "request": request,
             "has_key": settings.has_openai_key,
             "model": settings.openai_model,
+            "api_base": settings.public_api_url or "",
             "slots": [{"key": k, "label": SLOT_LABELS[k]} for k in SLOT_KEYS],
         },
     )
@@ -67,11 +84,11 @@ async def api_upload(sid: str = Form(...), file: UploadFile = File(...)):
     content = await file.read()
     dest.write_bytes(content)
 
-    # 선행 검증 (a)
-    v = validate_file(dest, original)
+    # 선행 검증 (a) — 워크북은 1회만 읽고 분류에 재사용
+    v, sheets = validate_file_with_sheets(dest, original)
     suggested = None
     if v.ok:
-        suggested = classify(dest, original).slot
+        suggested = classify(dest, original, sheets=sheets).slot
     else:
         dest.unlink(missing_ok=True)
 
@@ -89,6 +106,8 @@ async def api_upload(sid: str = Form(...), file: UploadFile = File(...)):
     # 자동 분류로 슬롯 자동 배정(빈 슬롯일 때만)
     if v.ok and suggested and suggested not in sess.meta["assign"]:
         sess.meta["assign"][suggested] = file_id
+
+    store.save(sess)
 
     # 화면에는 파일명/종류/뱃지/제안슬롯만 (내용 비표시)
     return {
@@ -124,6 +143,7 @@ def api_file_delete(sid: str, file_id: str):
     for slot in [s for s, fid in assign.items() if fid == file_id]:
         assign.pop(slot, None)
 
+    store.save(sess)
     return {"ok": True, "file_id": file_id, "assign": assign}
 
 
@@ -142,6 +162,7 @@ async def api_assign(request: Request):
             if sess.meta["files"][file_id]["valid"]:
                 clean[slot] = file_id
     sess.meta["assign"] = clean
+    store.save(sess)
     return {"assign": clean}
 
 
@@ -171,6 +192,7 @@ async def api_run(request: Request):
     settings = load_settings()
     outcome = run_pipeline(slot_paths, settings, sess.output_dir)
     sess.outputs = dict(outcome.outputs)
+    store.save(sess)
 
     downloads = [
         {"name": name, "url": f"/download/{sid}/{name}"}

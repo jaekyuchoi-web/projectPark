@@ -51,6 +51,8 @@ class Settings:
 
     openai_api_key: str | None
     openai_model: str
+    # web.app( Hosting 60초 제한) 접속 시 API 를 Cloud Run 으로 직접 호출
+    public_api_url: str | None = None
 
     @property
     def has_openai_key(self) -> bool:
@@ -64,4 +66,5 @@ def load_settings() -> Settings:
 
     key = os.getenv("OPENAI_API_KEY") or None
     model = os.getenv("OPENAI_MODEL") or "gpt-4.1-mini"
-    return Settings(openai_api_key=key, openai_model=model)
+    api_url = (os.getenv("PUBLIC_API_URL") or "").strip() or None
+    return Settings(openai_api_key=key, openai_model=model, public_api_url=api_url)

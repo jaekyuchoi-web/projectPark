@@ -2,6 +2,12 @@
 // 입력/출력 '내용'은 절대 렌더링하지 않는다. 파일명/종류/뱃지/건수/다운로드만.
 
 const App = window.__APP__;
+const API_BASE = (App.apiBase || "").replace(/\/$/, "");
+
+function apiUrl(path) {
+  return `${API_BASE}${path}`;
+}
+
 let sid = null;
 let uploading = false;
 const files = {}; // file_id -> {filename, ext, valid, reasons, suggested_slot}
@@ -26,7 +32,7 @@ function renderConfig() {
 // ── 세션 생성 ────────────────────────────────────────
 async function ensureSession() {
   if (sid) return sid;
-  const res = await fetch("/api/session", { method: "POST" });
+  const res = await fetch(apiUrl("/api/session"), { method: "POST" });
   const data = await res.json();
   sid = data.sid;
   return sid;
@@ -102,7 +108,7 @@ function renderFiles() {
 async function deleteFile(fileId) {
   if (!sid || !files[fileId]) return;
   try {
-    const res = await fetch(`/api/file/${sid}/${fileId}`, { method: "DELETE" });
+    const res = await fetch(apiUrl(`/api/file/${sid}/${fileId}`), { method: "DELETE" });
     if (!res.ok) throw new Error("삭제 실패");
     delete files[fileId];
     renderFiles();
@@ -117,6 +123,15 @@ function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+function formatApiError(data, status) {
+  if (!data) return `HTTP ${status}`;
+  if (typeof data.detail === "string") return data.detail;
+  if (Array.isArray(data.detail)) {
+    return data.detail.map(d => d.msg || JSON.stringify(d)).join(", ");
+  }
+  return data.message || `HTTP ${status}`;
+}
+
 // ── 슬롯 매핑 동기화 ─────────────────────────────────
 async function syncAssign() {
   const assign = {};
@@ -124,7 +139,7 @@ async function syncAssign() {
     const slot = sel.value;
     if (slot) assign[slot] = sel.dataset.file; // 마지막 선택이 슬롯을 차지(1:1)
   });
-  await fetch("/api/assign", {
+  await fetch(apiUrl("/api/assign"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sid, assign }),
@@ -153,11 +168,29 @@ async function uploadFiles(fileList) {
       fd.append("sid", sid);
       fd.append("file", file);
       try {
-        const res = await fetch("/api/upload", { method: "POST", body: fd });
-        const data = await res.json();
+        const res = await fetch(apiUrl("/api/upload"), { method: "POST", body: fd });
+        let data;
+        try {
+          data = await res.json();
+        } catch {
+          const timeoutHint = res.status === 502 || res.status === 504
+            ? " (요청 시간이 초과되었을 수 있습니다. 페이지를 새로고침 후 다시 시도하세요.)"
+            : "";
+          alert(`업로드 실패 (${file.name}): 서버 응답을 읽을 수 없습니다.${timeoutHint}`);
+          continue;
+        }
+        if (!res.ok) {
+          const detail = formatApiError(data, res.status);
+          alert(`업로드 실패 (${file.name}): ${detail}`);
+          continue;
+        }
+        if (!data.file_id) {
+          alert(`업로드 실패 (${file.name}): file_id 가 없습니다.`);
+          continue;
+        }
         files[data.file_id] = data;
       } catch (e) {
-        alert("업로드 실패: " + file.name);
+        alert(`업로드 실패 (${file.name}): 네트워크 오류`);
       }
       done += 1;
     }
@@ -183,7 +216,7 @@ async function run() {
   result.classList.add("hidden");
 
   try {
-    const res = await fetch("/api/run", {
+    const res = await fetch(apiUrl("/api/run"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sid }),
@@ -209,7 +242,7 @@ function renderResult(data) {
   }
   box.className = "rounded-lg border border-emerald-200 bg-emerald-50 p-4";
   const downloads = (data.downloads || []).map(d =>
-    `<a href="${d.url}" class="inline-flex items-center gap-2 rounded-md bg-white border px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 mr-2 mb-2">
+    `<a href="${apiUrl(d.url)}" class="inline-flex items-center gap-2 rounded-md bg-white border px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 mr-2 mb-2">
        ⬇ ${escapeHtml(d.name)}
      </a>`).join("");
   box.innerHTML = `

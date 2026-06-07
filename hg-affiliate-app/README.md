@@ -111,6 +111,9 @@ chmod +x deploy.sh
 `firebase.json`(저장소 루트)이 `hg-affiliate-runtime` 으로 모든 요청을 프록시합니다.
 Hosting만 다시 배포하려면 저장소 루트에서 `firebase deploy --only hosting` 을 실행하세요.
 
+Cloud Run 은 세션 상태를 인스턴스 메모리에 두므로 **`--max-instances 1`** 로 배포합니다.
+(인스턴스가 여러 개면 업로드마다 세션을 잃어 `undefined`·검증 실패가 날 수 있음)
+
 ## 구조
 
 ```

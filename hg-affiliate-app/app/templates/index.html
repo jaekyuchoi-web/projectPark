@@ -78,6 +78,7 @@
     window.__APP__ = {
       hasKey: {{ 'true' if has_key else 'false' }},
       model: "{{ model }}",
+      apiBase: "{{ api_base }}",
       slots: {{ slots | tojson }}
     };
   </script>

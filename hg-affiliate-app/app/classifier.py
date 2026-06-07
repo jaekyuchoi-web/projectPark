@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import SLOT_KEYS
+import pandas as pd
+
 from .excel_io import read_workbook, sheet_names
 
 # 슬롯별 키워드 (파일명·시트명·헤더에 등장하면 가점)
@@ -29,16 +31,28 @@ class ClassifyResult:
     scores: dict[str, int] # 슬롯별 점수 (디버그/표시용 아님, 내부)
 
 
-def _text_blob(path: Path, original_name: str) -> str:
+def _text_blob(
+    path: Path,
+    original_name: str,
+    sheets: dict[str, pd.DataFrame] | None = None,
+) -> str:
     """파일명 + 시트명 + 상단 헤더 텍스트만 모은다(값 데이터는 포함하지 않음)."""
     parts: list[str] = [Path(original_name).stem]
-    try:
-        parts.extend(sheet_names(path))
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        sheets = read_workbook(path)
-        for df in sheets.values():
+    loaded = sheets
+    if loaded is None:
+        try:
+            parts.extend(sheet_names(path))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            loaded = read_workbook(path)
+        except Exception:  # noqa: BLE001
+            loaded = None
+    else:
+        parts.extend(list(loaded.keys()))
+
+    if loaded:
+        for df in loaded.values():
             if df is None or df.empty:
                 continue
             head_rows = df.head(12)
@@ -47,8 +61,6 @@ def _text_blob(path: Path, original_name: str) -> str:
                     s = str(v).strip()
                     if s and s != "nan" and not _looks_numeric(s):
                         parts.append(s)
-    except Exception:  # noqa: BLE001
-        pass
     return " ".join(parts).lower()
 
 
@@ -57,8 +69,12 @@ def _looks_numeric(s: str) -> bool:
     return t.isdigit()
 
 
-def classify(path: Path, original_name: str) -> ClassifyResult:
-    blob = _text_blob(path, original_name)
+def classify(
+    path: Path,
+    original_name: str,
+    sheets: dict[str, pd.DataFrame] | None = None,
+) -> ClassifyResult:
+    blob = _text_blob(path, original_name, sheets=sheets)
     scores: dict[str, int] = {k: 0 for k in SLOT_KEYS}
     for slot, kws in SLOT_KEYWORDS.items():
         for kw in kws:
