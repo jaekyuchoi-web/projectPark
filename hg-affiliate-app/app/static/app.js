@@ -207,6 +207,9 @@ async function uploadFiles(fileList) {
 // ── 실행 ─────────────────────────────────────────────
 async function run() {
   if (!sid) { alert("먼저 파일을 업로드하세요."); return; }
+  const year = document.getElementById("period-year").value;
+  const quarter = document.getElementById("period-quarter").value;
+  if (!year) { alert("당기 년도를 입력하세요."); return; }
   await syncAssign();
   const btn = document.getElementById("run-btn");
   const prog = document.getElementById("progress");
@@ -219,7 +222,7 @@ async function run() {
     const res = await fetch(apiUrl("/api/run"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sid }),
+      body: JSON.stringify({ sid, year: Number(year), quarter: Number(quarter) }),
     });
     const data = await res.json();
     renderResult(data);
@@ -264,6 +267,12 @@ function bind() {
   dz.addEventListener("drop", e => uploadFiles(e.dataTransfer.files));
   document.getElementById("run-btn").addEventListener("click", run);
 }
+
+// 당기 년도 기본값 = 올해
+(function initPeriodYear() {
+  const y = document.getElementById("period-year");
+  if (y && !y.value) y.value = new Date().getFullYear();
+})();
 
 renderConfig();
 bind();

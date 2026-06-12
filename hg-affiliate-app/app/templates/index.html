@@ -16,10 +16,16 @@
       <p class="text-sm text-slate-500 mt-1 leading-relaxed">
         5종의 엑셀 파일을 올려주세요.<br>
         1) 전기 이월 소스 (전기말 계정별 잔액 명세서)<br>
-        2) 장기 거래 내역 소스 (당기 계정별 원장)<br>
+        2) 당기 거래 내역 소스 (당기 계정별 원장)<br>
         3) 당기 채권/채무 잔액 검증용 소스 (당기말 잔액 명세서)<br>
         4) 특관자 상호 정리 (정규화 기준/시드)<br>
         5) 전기 특관자 명세서 (양식/수식 템플릿)
+      </p>
+      <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mt-2 leading-relaxed">
+        ⚠️ <b>전기 = 직전 결산년도</b>(전년도 연간 결산 = 전년도 4분기)입니다.
+        결산은 연 1회뿐이라 <b>당기가 어느 분기든 전기는 항상 직전년도 4분기로 동일</b>합니다.
+        예) 당기가 2026년 1·2·3·4분기이면 전기는 모두 <b>2025년 4분기(연간)</b>.
+        ‘전분기·전반기’ 파일을 전기 슬롯에 올리지 마세요.
       </p>
     </header>
 
@@ -51,7 +57,27 @@
       <p id="empty-hint" class="text-sm text-slate-400">아직 업로드된 파일이 없습니다.</p>
     </section>
 
-    <!-- 3) 실행 -->
+    <!-- 3) 당기 선택 -->
+    <section class="mb-6">
+      <h2 class="text-sm font-semibold text-slate-700 mb-2">3. 당기 선택</h2>
+      <div class="flex flex-wrap items-center gap-3 rounded-lg border bg-white p-3">
+        <label class="text-sm text-slate-600">년도
+          <input id="period-year" type="number" min="2000" max="2099" step="1"
+                 class="ml-1 w-24 border rounded px-2 py-1 text-sm" />
+        </label>
+        <label class="text-sm text-slate-600">분기
+          <select id="period-quarter" class="ml-1 border rounded px-2 py-1 text-sm bg-white">
+            <option value="1">1Q (1~3월)</option>
+            <option value="2">2Q (1~6월)</option>
+            <option value="3">3Q (1~9월)</option>
+            <option value="4">4Q (1~12월)</option>
+          </select>
+        </label>
+        <span class="text-xs text-slate-400">선택한 당기 기간(해당년도 1월~분기말월)의 거래만 원장에서 추출합니다.</span>
+      </div>
+    </section>
+
+    <!-- 4) 실행 -->
     <section class="mb-6">
       <button id="run-btn"
               class="w-full rounded-lg bg-indigo-600 text-white font-semibold py-3 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition">
@@ -63,9 +89,9 @@
       </div>
     </section>
 
-    <!-- 4) 결과 (다운로드만) -->
+    <!-- 5) 결과 (다운로드만) -->
     <section id="result" class="hidden">
-      <h2 class="text-sm font-semibold text-slate-700 mb-2">3. 결과</h2>
+      <h2 class="text-sm font-semibold text-slate-700 mb-2">5. 결과</h2>
       <div id="result-box" class="rounded-lg border p-4"></div>
     </section>
 

@@ -18,6 +18,7 @@ from starlette.requests import Request
 
 from .classifier import classify
 from .config import SLOT_KEYS, SLOT_LABELS, load_settings
+from .domain.period_extract import parse_period
 from .pipeline import run_pipeline
 from .session import store
 from .validation import validate_file_with_sheets
@@ -174,14 +175,24 @@ async def api_run(request: Request):
     if sess is None:
         raise HTTPException(404, "세션을 찾을 수 없습니다.")
 
+    # 당기(년도/분기) 선택 검증 — 당기 기간 정의 및 추출의 기준
+    try:
+        period = parse_period(body.get("year"), body.get("quarter"))
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "message": str(exc)})
+
     assign: dict[str, str] = sess.meta.get("assign", {})
     files: dict[str, dict] = sess.meta.get("files", {})
 
     # 필수 슬롯 점검: 최소한 당기말 잔액(검증용)은 있어야 함
     slot_paths: dict[str, Path | None] = {}
+    slot_filenames: dict[str, str] = {}
     for slot in SLOT_KEYS:
         fid = assign.get(slot)
-        slot_paths[slot] = Path(files[fid]["path"]) if fid and files.get(fid, {}).get("path") else None
+        info = files.get(fid, {}) if fid else {}
+        slot_paths[slot] = Path(info["path"]) if fid and info.get("path") else None
+        if fid and info.get("filename"):
+            slot_filenames[slot] = info["filename"]
 
     if slot_paths.get("current_balance") is None:
         return JSONResponse(
@@ -190,7 +201,7 @@ async def api_run(request: Request):
         )
 
     settings = load_settings()
-    outcome = run_pipeline(slot_paths, settings, sess.output_dir)
+    outcome = run_pipeline(slot_paths, settings, sess.output_dir, slot_filenames, period)
     sess.outputs = dict(outcome.outputs)
     store.save(sess)
 

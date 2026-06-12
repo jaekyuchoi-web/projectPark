@@ -19,6 +19,8 @@ from .domain.aggregate import AggregateResult, aggregate_balance, aggregate_ledg
 from .domain.error_report import build_error_report
 from .domain.errors import ErrorLog
 from .domain.governance import build_governance
+from .domain.period_check import evaluate_prior_period
+from .domain.period_extract import Period, build_ai_date_parser, extract_current_period
 from .domain.statement import build_statement
 from .normalize import normalize_names
 from .output_check import verify_output
@@ -114,6 +116,44 @@ def _balance_long_frame(path: Path | None) -> pd.DataFrame | None:
     return pd.concat(rows, ignore_index=True)
 
 
+def _period_blob(path: Path | None, filename: str | None) -> str:
+    """파일명 + 시트명만 모은다(전기 기준 점검용).
+
+    셀 내용(표제 행 포함)은 보지 않는다. 실제 잔액명세서의 표제에는 양식에서
+    남은 '(2021년 ...' 같은 stale 날짜가 박혀 있어 연도 오탐을 유발하기 때문이다.
+    이 파일들의 기간 표식은 파일명(예: '25.4Q', '26.1Q')이 가장 신뢰할 수 있다.
+    """
+    parts: list[str] = []
+    if filename:
+        parts.append(Path(filename).stem)
+    if path is not None:
+        try:
+            parts.extend(excel_io.sheet_names(path))
+        except Exception:  # noqa: BLE001
+            pass
+    return " ".join(parts)
+
+
+def _check_prior_period(
+    slot_paths: dict[str, Path | None],
+    slot_filenames: dict[str, str],
+    errors: ErrorLog,
+    selected_year: int | None = None,
+) -> None:
+    """전기 이월 소스가 '직전 결산년도'(전년도 4분기)가 맞는지 점검해 경고를 남긴다.
+
+    selected_year(당기 선택 년도)가 있으면 기대 전기연도(selected_year-1)로 정밀 검증.
+    """
+    prev_path = slot_paths.get("prev_balance")
+    if prev_path is None:
+        return
+    cur_path = slot_paths.get("current_balance")
+    prev_text = _period_blob(prev_path, slot_filenames.get("prev_balance"))
+    cur_text = _period_blob(cur_path, slot_filenames.get("current_balance")) if cur_path else ""
+    for w in evaluate_prior_period(prev_text, cur_text, selected_year=selected_year):
+        errors.add("전기 기준 확인", "전기 이월 소스(prev_balance)", w.content, w.action)
+
+
 def _distinct_partners(frames: list[pd.DataFrame | None]) -> list[str]:
     names: set[str] = set()
     for df in frames:
@@ -139,8 +179,10 @@ def _verify_reconstruction(
 ) -> None:
     """(전기이월+당기거래) 재구성 잔액 ↔ 검증용(당기말) 대조.
 
-    불일치는 검증용에 맞추고(이미 38.2는 검증용 기준) 오류목록에 기록한다.
-    대표적으로 매출채권/매입채무에 대해 점검.
+    전기이월 = 직전 결산년도(전년도 4분기) 잔액이라는 전제이며, 당기거래(원장)는
+    회계연도 누적(YTD)이어야 이 등식이 성립한다. 즉 전기는 분기와 무관하게 단일
+    기준선(전년도 4분기)이다. 불일치는 검증용에 맞추고(이미 38.2는 검증용 기준)
+    오류목록에 기록한다. 대표적으로 매출채권/매입채무에 대해 점검.
     """
     if prev_balance is None or ledger is None or current_balance is None:
         return
@@ -188,8 +230,14 @@ def run_pipeline(
     slot_paths: dict[str, Path | None],
     settings: Settings,
     output_dir: Path,
+    slot_filenames: dict[str, str] | None = None,
+    period: Period | None = None,
 ) -> PipelineOutcome:
     errors = ErrorLog()
+
+    # 0) 전기 기준 점검 — 전기 이월 소스가 직전 결산년도(전년도 4분기)인지 확인(경고)
+    _check_prior_period(slot_paths, slot_filenames or {}, errors,
+                        selected_year=period.year if period else None)
 
     # 1) 슬롯별 프레임 로드
     #   - 잔액명세서(전기/당기)는 '시트=계정' 구조 → long 프레임으로 평면화
@@ -197,6 +245,28 @@ def run_pipeline(
     prev_balance = _balance_long_frame(slot_paths.get("prev_balance"))
     ledger = _best_frame(slot_paths.get("current_ledger"))
     current_balance = _balance_long_frame(slot_paths.get("current_balance"))
+
+    # 1.5) 당기 데이터 추출 — 선택된 당기 기간(해당년도 1월~분기말월)으로 원장을 자른다.
+    #   날짜 컬럼 미식별 / AI 보조 후에도 미파싱 셀이 남으면 엄격 차단(다운로드 차단).
+    if period is not None and ledger is not None:
+        ext = extract_current_period(ledger, period, ai_parser=build_ai_date_parser(settings))
+        if not ext.ok:
+            errors.add("당기 추출 실패", "당기 원장(전표일자)", ext.reason,
+                       "원장의 전표일자 컬럼/형식을 확인하거나 OPENAI_API_KEY를 설정해 AI 보조 파싱을 활성화하세요.")
+            error_wb = build_error_report(errors)
+            error_path = output_dir / "오류목록.xlsx"
+            error_wb.save(error_path)
+            return PipelineOutcome(
+                ok=False,
+                message="당기 데이터 추출에 실패하여 다운로드를 차단했습니다(날짜 해석 불가).",
+                outputs={"오류목록": error_path},
+                error_count=errors.count,
+            )
+        ledger = ext.df
+        if ext.parsed_ai:
+            errors.add("당기 추출 안내", "당기 원장(전표일자)",
+                       f"결정론 파싱 실패 셀 {ext.parsed_ai}건을 AI 보조 파서로 해석했습니다.",
+                       "필요 시 원장 전표일자 형식을 표준화하세요.")
 
     if current_balance is None:
         errors.add("형식 경고", "당기말 잔액명세서", "검증용 잔액명세서를 읽지 못함", "파일/시트/헤더를 확인하세요.")
