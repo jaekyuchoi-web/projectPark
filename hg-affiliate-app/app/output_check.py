@@ -76,11 +76,13 @@ def _recalc_with_libreoffice(src: Path, soffice: str) -> Path | None:
     """LibreOffice 로 재계산하여 새 xlsx 를 생성. 실패 시 None."""
     out_dir = Path(tempfile.mkdtemp(prefix="recalc_"))
     try:
+        # 대용량 명세서 재계산도 끝까지 수행하도록 넉넉히(10분). Cloud Run 요청
+        # 타임아웃(3600s) 안에서 명세서/지배구조 2회 재계산이 모두 들어간다.
         subprocess.run(
             [soffice, "--headless", "--calc",
              "--convert-to", "xlsx:Calc MS Excel 2007 XML",
              "--outdir", str(out_dir), str(src)],
-            check=True, capture_output=True, timeout=120,
+            check=True, capture_output=True, timeout=600,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None

@@ -38,15 +38,22 @@ if [[ -z "${RUN_URL}" ]]; then
 fi
 
 echo "==> Cloud Run 배포: ${SERVICE} (${REGION})"
+# 처리 시간/자원 제약 해제: 실제 분기 데이터(10MB+ 원장 + AI 정규화 +
+# LibreOffice 재계산 2회)는 5분을 초과하므로 Cloud Run 한도를 최대치로 둔다.
+#   --timeout 3600 : Cloud Run 요청 타임아웃 최대값(60분). 동기 요청의 상한.
+#   --memory 16Gi / --cpu 4 : 대용량 .xls 를 문자열 DataFrame 으로 적재해도
+#                             OOM 이 나지 않도록 넉넉히. 유휴 시 0으로 스케일되어
+#                             평소 비용은 없고 처리 중에만 과금된다.
 gcloud run deploy "${SERVICE}" \
   --project "${PROJECT}" \
   --region "${REGION}" \
   --image "${IMAGE}:${TAG}" \
   --port 8080 \
-  --memory 2Gi \
-  --cpu 1 \
-  --timeout 300 \
-  --max-instances 1 \
+  --memory 16Gi \
+  --cpu 4 \
+  --cpu-boost \
+  --timeout 3600 \
+  --max-instances 3 \
   --allow-unauthenticated \
   --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY},OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini},PUBLIC_API_URL=${RUN_URL}"
 
