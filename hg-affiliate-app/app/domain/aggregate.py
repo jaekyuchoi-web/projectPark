@@ -119,10 +119,10 @@ def aggregate_ledger(
         if C.match_bucket(acc, C.ACCRUED_INCOME_KEYWORDS):
             accrued_net[canon] = accrued_net.get(canon, 0.0) + (debit - credit)
 
-        # 38.4 자금대여 = 대여금 차변 증가(전기이월 라인 제외)
-        if C.match_bucket(acc, ["단기대여금", "장기대여금", "대여금"]):
+        # 38.4 자금대여 = 단기·장기대여금 차변 증가(이전 기간 블록/충당금 제외)
+        if C.match_bucket(acc, C.LENDING_KEYWORDS, exclude=C.ALLOWANCE_KEYWORDS):
             text = " ".join(str(row.get(c, "")) for c in ledger.columns)
-            if "이월" not in text and debit > 0:
+            if not any(token in text for token in C.FUND_LENDING_CARRYFORWARD_TEXTS) and debit > 0:
                 agg.fund_lending += debit
 
     # 매출등 기타: 이자수익 + 미수수익 잔액증감 역산(당기말-전기이월-원장순증)
