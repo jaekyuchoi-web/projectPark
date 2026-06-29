@@ -139,10 +139,11 @@ def _check_prior_period(
     slot_filenames: dict[str, str],
     errors: ErrorLog,
     selected_year: int | None = None,
+    selected_period: Period | None = None,
 ) -> None:
-    """전기 이월 소스가 '직전 결산년도'(전년도 4분기)가 맞는지 점검해 경고를 남긴다.
+    """전기 이월 소스가 전년도 온기인지 점검해 경고를 남긴다.
 
-    selected_year(당기 선택 년도)가 있으면 기대 전기연도(selected_year-1)로 정밀 검증.
+    selected_period의 연도를 기준으로 기대 전기연도(selected_year-1)를 검증한다.
     """
     prev_path = slot_paths.get("prev_balance")
     if prev_path is None:
@@ -150,7 +151,9 @@ def _check_prior_period(
     cur_path = slot_paths.get("current_balance")
     prev_text = _period_blob(prev_path, slot_filenames.get("prev_balance"))
     cur_text = _period_blob(cur_path, slot_filenames.get("current_balance")) if cur_path else ""
-    for w in evaluate_prior_period(prev_text, cur_text, selected_year=selected_year):
+    year = selected_period.year if selected_period is not None else selected_year
+    quarter = selected_period.quarter if selected_period is not None else None
+    for w in evaluate_prior_period(prev_text, cur_text, selected_year=year, selected_quarter=quarter):
         errors.add("전기 기준 확인", "전기 이월 소스(prev_balance)", w.content, w.action)
 
 
@@ -179,10 +182,9 @@ def _verify_reconstruction(
 ) -> None:
     """(전기이월+당기거래) 재구성 잔액 ↔ 검증용(당기말) 대조.
 
-    전기이월 = 직전 결산년도(전년도 4분기) 잔액이라는 전제이며, 당기거래(원장)는
-    회계연도 누적(YTD)이어야 이 등식이 성립한다. 즉 전기는 분기와 무관하게 단일
-    기준선(전년도 4분기)이다. 불일치는 검증용에 맞추고(이미 38.2는 검증용 기준)
-    오류목록에 기록한다. 대표적으로 매출채권/매입채무에 대해 점검.
+    전기이월은 전년도 온기(연간 결산 = 4분기) 잔액이라는 전제다. 불일치는
+    검증용에 맞추고(이미 38.2는 검증용 기준) 오류목록에 기록한다.
+    대표적으로 매출채권/매입채무에 대해 점검.
     """
     if prev_balance is None or ledger is None or current_balance is None:
         return
@@ -235,9 +237,9 @@ def run_pipeline(
 ) -> PipelineOutcome:
     errors = ErrorLog()
 
-    # 0) 전기 기준 점검 — 전기 이월 소스가 직전 결산년도(전년도 4분기)인지 확인(경고)
+    # 0) 전기 기준 점검 — 전년도 온기인지 확인(경고)
     _check_prior_period(slot_paths, slot_filenames or {}, errors,
-                        selected_year=period.year if period else None)
+                        selected_period=period)
 
     # 1) 슬롯별 프레임 로드
     #   - 잔액명세서(전기/당기)는 '시트=계정' 구조 → long 프레임으로 평면화

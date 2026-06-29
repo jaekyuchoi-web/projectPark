@@ -16,7 +16,7 @@ from app.domain.aggregate import AggregateResult, aggregate_ledger
 from app.domain.errors import ErrorLog
 from app.domain.period_extract import Period
 from app.normalize import normalize_names
-from app.pipeline import _best_frame, run_pipeline
+from app.pipeline import _best_frame, _check_prior_period, run_pipeline
 
 SAMPLE_25_3Q_DIR = Path(__file__).resolve().parents[2] / "_sample_input_25.3Q"
 
@@ -118,6 +118,21 @@ def test_sample_25_3q_pipeline_produces_outputs(tmp_path):
     assert outcome.ok is True
     assert {"당기_특관자_명세서", "지배구조", "오류목록"} <= set(outcome.outputs)
     assert all(path.exists() for path in outcome.outputs.values())
+
+
+@pytest.mark.skipif(_sample_25_3q("1)") is None, reason="_sample_input_25.3Q 전기 샘플 없음")
+def test_sample_25_3q_prior_year_end_is_valid_prev_under_final_rule():
+    slot_paths = _sample_25_3q_slots()
+    errors = ErrorLog()
+
+    _check_prior_period(
+        slot_paths,
+        {k: v.name for k, v in slot_paths.items() if v is not None},
+        errors,
+        selected_period=Period(2025, 3),
+    )
+
+    assert errors.count == 0
 
 
 def test_fund_lending_ignores_prior_half_carryforward_block():

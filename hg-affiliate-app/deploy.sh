@@ -44,6 +44,8 @@ echo "==> Cloud Run 배포: ${SERVICE} (${REGION})"
 #   --memory 16Gi / --cpu 4 : 대용량 .xls 를 문자열 DataFrame 으로 적재해도
 #                             OOM 이 나지 않도록 넉넉히. 유휴 시 0으로 스케일되어
 #                             평소 비용은 없고 처리 중에만 과금된다.
+#   --max-instances 1 : 세션/출력 파일이 인스턴스 로컬 디스크(.sessions)에 있어
+#                       다운로드 요청도 같은 인스턴스가 받아야 한다.
 gcloud run deploy "${SERVICE}" \
   --project "${PROJECT}" \
   --region "${REGION}" \
@@ -53,7 +55,7 @@ gcloud run deploy "${SERVICE}" \
   --cpu 4 \
   --cpu-boost \
   --timeout 3600 \
-  --max-instances 3 \
+  --max-instances 1 \
   --allow-unauthenticated \
   --set-env-vars "OPENAI_API_KEY=${OPENAI_API_KEY},OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini},PUBLIC_API_URL=${RUN_URL}"
 
