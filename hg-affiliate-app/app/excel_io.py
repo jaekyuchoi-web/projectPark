@@ -82,11 +82,27 @@ def sheet_names(path: Path) -> list[str]:
 def detect_header_row(df: pd.DataFrame, max_scan: int = 15) -> int:
     """상단에서 헤더로 보이는 행 인덱스를 추정한다.
 
-    비어있지 않은 셀이 가장 많은 행을 헤더로 간주(간이 휴리스틱).
+    먼저 회계 파일의 대표 헤더(거래처/계정/금액 등)를 찾고, 없으면
+    비어있지 않은 셀이 가장 많은 행을 헤더로 간주한다.
     """
+    header_tokens = {
+        "partner": {"거래처", "거래처명", "상호", "업체", "거래상대", "계정상대", "성명"},
+        "account": {"계정", "계정과목", "계정명", "과목", "account"},
+        "amount": {"금액", "잔액", "기말잔액", "당기잔액", "balance", "amount"},
+        "debit_credit": {"차변", "차변금액", "debit", "대변", "대변금액", "credit"},
+    }
+    limit = min(max_scan, len(df))
+    for r in range(limit):
+        values = {str(v).strip() for v in df.iloc[r].tolist() if str(v).strip() and str(v) != "nan"}
+        has_partner = bool(values & header_tokens["partner"])
+        has_account = bool(values & header_tokens["account"])
+        has_amount = bool(values & header_tokens["amount"])
+        has_debit_credit = bool(values & header_tokens["debit_credit"])
+        if (has_partner and has_amount) or (has_account and (has_amount or has_debit_credit)):
+            return r
+
     best_row = 0
     best_count = -1
-    limit = min(max_scan, len(df))
     for r in range(limit):
         count = int(df.iloc[r].map(lambda v: bool(str(v).strip()) and str(v) != "nan").sum())
         if count > best_count:

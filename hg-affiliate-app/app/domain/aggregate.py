@@ -25,7 +25,7 @@ from .errors import ErrorLog
 class Aggregate:
     canonical: str
     sales: float = 0.0          # 38.1 매출
-    sales_other: float = 0.0    # 38.1 매출등 기타(이자수익)
+    sales_other: float = 0.0    # 38.1 매출등 기타(이자수익, 충당금 변동 제외)
     purchase: float = 0.0       # 38.1 매입
     purchase_other: float = 0.0 # 38.1 매입등 기타
     ar: float = 0.0             # 38.2 매출채권
@@ -36,7 +36,7 @@ class Aggregate:
     cb_issued: float = 0.0      # 38.2 발행전환사채
     ap: float = 0.0             # 38.2 매입채무
     allowance_end: float = 0.0  # 38.3 당기말 대손충당금
-    allowance_expense: float = 0.0  # 38.3 당기 대손상각비
+    allowance_expense: float = 0.0  # 38.3 당기 대손상각비(환입이면 음수)
     fund_lending: float = 0.0   # 38.4 자금대여(당기 발생분)
     # 38.5 경영진 보상은 산출 불가 → 공란 (값 없음)
 
@@ -116,7 +116,7 @@ def aggregate_ledger(
             agg.purchase_other += debit - credit
 
         # 미수수익 원장 순증 (잔액증감 역산용)
-        if C.match_bucket(acc, C.ACCRUED_INCOME_KEYWORDS):
+        if C.match_bucket(acc, C.ACCRUED_INCOME_KEYWORDS, exclude=C.ALLOWANCE_KEYWORDS):
             accrued_net[canon] = accrued_net.get(canon, 0.0) + (debit - credit)
 
         # 38.4 자금대여 = 단기·장기대여금 차변 증가(이전 기간 블록/충당금 제외)
@@ -126,10 +126,19 @@ def aggregate_ledger(
                 agg.fund_lending += debit
 
     # 매출등 기타: 이자수익 + 미수수익 잔액증감 역산(당기말-전기이월-원장순증)
-    prev_accrued = _balance_by_canon(prev_balance, mapping, canonical, C.ACCRUED_INCOME_KEYWORDS)
-    cur_accrued = _balance_by_canon(current_balance, mapping, canonical, C.ACCRUED_INCOME_KEYWORDS)
+    prev_accrued = _balance_by_canon(prev_balance, mapping, canonical, C.ACCRUED_INCOME_KEYWORDS,
+                                      exclude=C.ALLOWANCE_KEYWORDS)
+    cur_accrued = _balance_by_canon(current_balance, mapping, canonical, C.ACCRUED_INCOME_KEYWORDS,
+                                     exclude=C.ALLOWANCE_KEYWORDS)
+    prev_allow = _balance_by_canon(prev_balance, mapping, canonical, C.ALLOWANCE_KEYWORDS)
+    cur_allow = _balance_by_canon(current_balance, mapping, canonical, C.ALLOWANCE_KEYWORDS)
     for canon, agg in result.by_canonical.items():
+        if canon not in prev_accrued and canon not in cur_accrued:
+            continue
         delta = cur_accrued.get(canon, 0.0) - prev_accrued.get(canon, 0.0) - accrued_net.get(canon, 0.0)
+        allowance_delta = cur_allow.get(canon, 0.0) - prev_allow.get(canon, 0.0)
+        if _same_abs_amount(delta, allowance_delta):
+            continue
         agg.sales_other += delta
 
 
@@ -153,6 +162,11 @@ def _balance_by_canon(
         if C.match_bucket(acc, keywords, exclude):
             out[canon] = out.get(canon, 0.0) + C.to_number(row.get(amt_col))
     return out
+
+
+def _same_abs_amount(left: float, right: float, tolerance: float = 1.0) -> bool:
+    """원 단위 반올림 차이를 허용해 두 금액의 절대값이 같은지."""
+    return abs(right) > tolerance and abs(abs(left) - abs(right)) <= tolerance
 
 
 def aggregate_balance(
@@ -187,7 +201,7 @@ def aggregate_balance(
         agg = result.get(canon)
         agg.allowance_end = end
         inc = end - prev_allow.get(canon, 0.0)
-        agg.allowance_expense = inc if inc > 0 else 0.0
+        agg.allowance_expense = inc
 
     # 투자/발행 전환사채 보유자 확인 필요 → 검토 항목
     if any(result.get(c).cb_invest or result.get(c).cb_issued for c in result.by_canonical):

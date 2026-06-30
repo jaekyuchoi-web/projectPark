@@ -10,15 +10,26 @@ from pathlib import Path
 
 import pytest
 
+from app import excel_io
 from app.config import Settings
 from app.domain import columns as C
-from app.domain.aggregate import AggregateResult, aggregate_ledger
+from app.domain.aggregate import AggregateResult, aggregate_balance, aggregate_ledger
 from app.domain.errors import ErrorLog
-from app.domain.period_extract import Period
+from app.domain.period_extract import Period, extract_current_period
 from app.normalize import normalize_names
-from app.pipeline import _best_frame, _check_prior_period, run_pipeline
+from app.pipeline import _balance_long_frame, _best_frame, _check_prior_period, _distinct_partners, run_pipeline
 
+SAMPLE_Q1_DIR = Path(__file__).resolve().parents[2] / "_sample_input"
 SAMPLE_25_3Q_DIR = Path(__file__).resolve().parents[2] / "_sample_input_25.3Q"
+
+
+def _sample_q1(prefix: str) -> Path | None:
+    if not SAMPLE_Q1_DIR.is_dir():
+        return None
+    for p in sorted(SAMPLE_Q1_DIR.iterdir()):
+        if p.name.startswith(prefix) and p.suffix.lower() in {".xlsx", ".xlsm", ".xls", ".xlsb", ".csv"}:
+            return p
+    return None
 
 
 def _sample_25_3q(prefix: str) -> Path | None:
@@ -45,6 +56,24 @@ def test_381_keywords_follow_reference_workbook():
     assert C.match_bucket("건설중인자산_무형", C.ASSET_ACQUIRE_KEYWORDS)
     assert not C.match_bucket("임대료수익", C.SALES_KEYWORDS)
     assert not C.match_bucket("기업업무추진비", C.OTHER_EXPENSE_KEYWORDS)
+
+
+def test_normalized_frame_prefers_accounting_header_labels_over_dense_data_rows():
+    pd = pytest.importorskip("pandas")
+    raw = pd.DataFrame(
+        [
+            ["미수수익명세서", None, None, None, None, None, None, None, None, None, None, None],
+            ["(2026년 3월 31일 현재)", None, None, None, None, None, None, None, None, None, None, None],
+            ["회사명", None, None, None, None, None, None, "(단위 : 원)", None, None, None, None],
+            ["코드", "거래처", "내용", "이율", "금액", "대손충당금", "잔액", "비고", "사업장", None, None, None],
+            ["89004", "앨리브랜즈주식회사", "단기대여금", "0.046", "5695178", "0", "5695178", None, "본사", "본사", "123", "456"],
+        ]
+    )
+
+    normalized = excel_io.normalized_frame(raw)
+
+    assert C.resolve_column(normalized, "partner") == "거래처"
+    assert C.resolve_column(normalized, "amount") == "금액"
 
 
 @pytest.mark.skipif(_sample_25_3q("2)") is None, reason="_sample_input_25.3Q 샘플 원장 없음")
@@ -197,3 +226,137 @@ def test_fund_lending_ignores_allowance_accounts():
     )
 
     assert result.get("특관자A").fund_lending == 2000
+
+
+def test_interest_income_is_not_offset_when_accrued_balance_source_is_absent():
+    pd = pytest.importorskip("pandas")
+    ledger = pd.DataFrame(
+        [
+            {"계정명": "미수수익", "거래처명": "특관자A", "차변": "100", "대변": "0"},
+            {"계정명": "이자수익", "거래처명": "특관자A", "차변": "0", "대변": "100"},
+        ]
+    )
+    result = AggregateResult()
+
+    aggregate_ledger(
+        ledger,
+        prev_balance=None,
+        current_balance=None,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        result=result,
+        errors=ErrorLog(),
+    )
+
+    assert result.get("특관자A").sales_other == 100
+
+
+def test_accrued_income_adjustment_ignores_allowance_account_entries():
+    pd = pytest.importorskip("pandas")
+    ledger = pd.DataFrame(
+        [
+            {"계정명": "미수수익", "거래처명": "특관자A", "차변": "100", "대변": "0"},
+            {"계정명": "대손충당금(미수수익)", "거래처명": "특관자A", "차변": "0", "대변": "100"},
+            {"계정명": "이자수익", "거래처명": "특관자A", "차변": "0", "대변": "100"},
+        ]
+    )
+    prev_balance = pd.DataFrame([{"거래처": "특관자A", "계정과목": "미수수익", "금액": 0}])
+    current_balance = pd.DataFrame([{"거래처": "특관자A", "계정과목": "미수수익", "금액": 100}])
+    result = AggregateResult()
+
+    aggregate_ledger(
+        ledger,
+        prev_balance=prev_balance,
+        current_balance=current_balance,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        result=result,
+        errors=ErrorLog(),
+    )
+
+    assert result.get("특관자A").sales_other == 100
+
+
+@pytest.mark.skipif(_sample_q1("2)") is None, reason="_sample_input 샘플 원장 없음")
+def test_sample_q1_sales_other_keeps_interest_income_and_excludes_lux_allowance():
+    settings = Settings(openai_api_key=None, openai_model="gpt-4.1-mini")
+    prev_balance = _balance_long_frame(_sample_q1("1)"))
+    current_balance = _balance_long_frame(_sample_q1("3)"))
+    ledger = _best_frame(_sample_q1("2)"))
+    extracted = extract_current_period(ledger, Period(2026, 1))
+    assert extracted.ok is True
+
+    norm = normalize_names(
+        _distinct_partners([extracted.df, current_balance, prev_balance]),
+        _sample_q1("4)"),
+        settings,
+    )
+    canonical = norm.canonical or set(norm.mapping.values())
+    result = AggregateResult()
+    aggregate_balance(current_balance, prev_balance, norm.mapping, canonical, result, ErrorLog())
+    aggregate_ledger(extracted.df, prev_balance, current_balance, norm.mapping, canonical, result, ErrorLog())
+
+    assert result.get("(주)프레시코").sales_other == 147_338_630
+    assert result.get("(주)룩스앤메이코스메틱").sales_other == 0
+
+
+def test_allowance_decrease_is_not_reclassified_to_sales_other():
+    pd = pytest.importorskip("pandas")
+    prev_balance = pd.DataFrame(
+        [
+            {"거래처": "특관자A", "계정과목": "미수수익", "금액": 7_264_104_108},
+            {"거래처": "특관자A", "계정과목": "대손충당금", "금액": 7_264_104_108},
+        ]
+    )
+    current_balance = pd.DataFrame(
+        [
+            {"거래처": "특관자A", "계정과목": "미수수익", "금액": 6_500_000_000},
+            {"거래처": "특관자A", "계정과목": "대손충당금", "금액": 6_500_000_000},
+        ]
+    )
+    ledger = pd.DataFrame(columns=["계정명", "거래처명", "차변", "대변"])
+    result = AggregateResult()
+    errors = ErrorLog()
+    aggregate_balance(
+        current_balance,
+        prev_balance,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        result=result,
+        errors=errors,
+    )
+
+    aggregate_ledger(
+        ledger,
+        prev_balance=prev_balance,
+        current_balance=current_balance,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        result=result,
+        errors=errors,
+    )
+
+    assert result.get("특관자A").sales_other == 0
+
+
+def test_allowance_reversal_stays_in_allowance_expense_as_negative():
+    pd = pytest.importorskip("pandas")
+    prev_balance = pd.DataFrame(
+        [{"거래처": "특관자A", "계정과목": "대손충당금", "금액": 7_264_104_108}]
+    )
+    current_balance = pd.DataFrame(
+        [{"거래처": "특관자A", "계정과목": "대손충당금", "금액": 6_500_000_000}]
+    )
+    result = AggregateResult()
+
+    aggregate_balance(
+        current_balance,
+        prev_balance,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        result=result,
+        errors=ErrorLog(),
+    )
+
+    assert result.get("특관자A").allowance_end == 6_500_000_000
+    assert result.get("특관자A").allowance_expense == -764_104_108

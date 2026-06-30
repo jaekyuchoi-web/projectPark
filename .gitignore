@@ -3,6 +3,8 @@
 # 실거래 데이터 샘플 (HLB 실제 회계자료 — 절대 커밋 금지)
 _sample_input/
 _sample_input*/
+outputs/
+firebase-debug.log
 
 # OS
 .DS_Store
