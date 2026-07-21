@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -18,6 +19,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from .aggregate import AggregateResult
+from .period_extract import Period
+from .statement_detail import StatementDetailRow
 from .statement_template import fill_statement_template
 
 # 고정 템플릿(정답 양식). 존재하면 이 양식으로 산출, 없으면 단순표 폴백.
@@ -56,7 +59,11 @@ def _style_header(cell) -> None:
     cell.border = _BORDER
 
 
-def build_statement(result: AggregateResult) -> tuple[Workbook, list[str]]:
+def build_statement(
+    result: AggregateResult,
+    period: Period,
+    detail_rows: Sequence[StatementDetailRow],
+) -> tuple[Workbook, list[str]]:
     """당기 특관자 명세서 워크북을 만든다.
 
     Returns:
@@ -64,14 +71,15 @@ def build_statement(result: AggregateResult) -> tuple[Workbook, list[str]]:
         정규명 목록(수기 추가 검토). 폴백 경로에선 빈 목록.
     """
     if TEMPLATE_PATH.exists():
-        try:
-            return fill_statement_template(TEMPLATE_PATH, result)
-        except Exception:  # noqa: BLE001 — 템플릿 손상 시 단순표로 폴백
-            pass
-    return _build_legacy(result), []
+        return fill_statement_template(TEMPLATE_PATH, result, period, detail_rows)
+    return _build_legacy(result, period, detail_rows), []
 
 
-def _build_legacy(result: AggregateResult) -> Workbook:
+def _build_legacy(
+    result: AggregateResult,
+    period: Period,
+    detail_rows: Sequence[StatementDetailRow],
+) -> Workbook:
     wb = Workbook()
 
     data_ws = wb.active
@@ -85,9 +93,17 @@ def _build_legacy(result: AggregateResult) -> Workbook:
     _write_pivot_sheet(pivot_ws, result)
 
     note_ws = wb.create_sheet("39.1")
-    note_ws["A1"] = "39.1 특수관계자 거래 요약"
-    note_ws["A1"].font = Font(bold=True)
-    note_ws["A3"] = "본 시트는 전기 명세서 양식에 맞추어 보완이 필요합니다(개별표시/기타 행 구성)."
+    note_ws["A1"] = period.label
+    headers = [
+        "매입매출", "자금거래", "채권채무", "수익.비용", "구분계정과목",
+        "계정코드", "계정과목", "날짜", "적요", "거래처코드", "거래처명",
+        "회사명(본지점합산)", "차변", "대변", "잔액",
+    ]
+    for column, header in enumerate(headers, start=2):
+        _style_header(note_ws.cell(row=15, column=column, value=header))
+    for row_number, detail in enumerate(detail_rows, start=16):
+        for column, value in enumerate(detail.as_excel_row(), start=2):
+            note_ws.cell(row=row_number, column=column, value=value)
 
     # _집계 시트는 데이터 소스이므로 숨김
     data_ws.sheet_state = "hidden"

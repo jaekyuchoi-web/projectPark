@@ -22,12 +22,16 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from copy import copy
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
 from ..normalize import _norm_key
 from .aggregate import Aggregate, AggregateResult
+from .period_extract import Period
+from .statement_detail import StatementDetailRow
 
 # 39.2 블록 좌표(헤더 검증 포함)
 _B1_FIRST, _B1_LAST = 3, 44       # 블록1: 거래(38.1)
@@ -58,6 +62,67 @@ _EXT_RE = re.compile(r"\[\d+\]")  # 외부 워크북 링크 인덱스
 # 셀에 그대로 박힌 엑셀 오류 토큰(수식이 아닌 문자열 값으로 저장된 경우 포함)
 _ERR_TOKENS = ("#REF!", "#VALUE!", "#DIV/0!", "#NAME?", "#N/A", "#NULL!", "#NUM!")
 
+_DETAIL_FIRST_ROW = 16
+_DETAIL_FIRST_COL = 2
+_DETAIL_LAST_COL = 16
+_DETAIL_RANGE_RE = re.compile(
+    r"(?P<prefix>\$?(?P<col>[B-P])\$?16:\$?(?P=col)\$?)\d+"
+)
+
+
+def _rewrite_detail_formula_ranges(ws, last_row: int) -> None:
+    for row in ws.iter_rows(min_row=1, max_row=_DETAIL_FIRST_ROW - 1):
+        for cell in row:
+            formula = cell.value
+            if not isinstance(formula, str) or not formula.startswith("="):
+                continue
+            cell.value = _DETAIL_RANGE_RE.sub(
+                lambda match: f"{match.group('prefix')}{last_row}",
+                formula,
+            )
+
+
+def _write_statement_detail(
+    ws,
+    period: Period,
+    rows: Sequence[StatementDetailRow],
+) -> None:
+    style_source = [
+        ws.cell(row=_DETAIL_FIRST_ROW, column=column)
+        for column in range(_DETAIL_FIRST_COL, _DETAIL_LAST_COL + 1)
+    ]
+    source_height = ws.row_dimensions[_DETAIL_FIRST_ROW].height
+    clear_through = max(ws.max_row, _DETAIL_FIRST_ROW)
+    for row in ws.iter_rows(
+        min_row=_DETAIL_FIRST_ROW,
+        max_row=clear_through,
+        min_col=_DETAIL_FIRST_COL,
+        max_col=_DETAIL_LAST_COL,
+    ):
+        for cell in row:
+            cell.value = None
+            cell.comment = None
+            cell.hyperlink = None
+
+    for offset, detail in enumerate(rows):
+        target_row = _DETAIL_FIRST_ROW + offset
+        if source_height is not None:
+            ws.row_dimensions[target_row].height = source_height
+        for index, value in enumerate(detail.as_excel_row()):
+            column = _DETAIL_FIRST_COL + index
+            target = ws.cell(row=target_row, column=column, value=value)
+            source = style_source[index]
+            target._style = copy(source._style)
+            target.number_format = source.number_format
+            target.alignment = copy(source.alignment)
+
+    last_row = _DETAIL_FIRST_ROW + max(len(rows), 1) - 1
+    _rewrite_detail_formula_ranges(ws, last_row)
+    ws["A1"] = period.label
+    label_font = copy(ws["A1"].font)
+    label_font.bold = True
+    ws["A1"].font = label_font
+
 
 def _has_data(agg: Aggregate) -> bool:
     # 자동 주입 대상 버킷만 본다. 전환사채(cb_invest/cb_issued)는 수기 영역이라
@@ -74,6 +139,8 @@ def _has_data(agg: Aggregate) -> bool:
 def fill_statement_template(
     template_path: Path,
     result: AggregateResult,
+    period: Period,
+    detail_rows: Sequence[StatementDetailRow],
 ) -> tuple[Workbook, list[str]]:
     """고정 템플릿에 당기 집계값을 주입한다.
 
@@ -83,6 +150,7 @@ def fill_statement_template(
     """
     wb = load_workbook(template_path, data_only=False)
     wb_cache = load_workbook(template_path, data_only=True)
+    _write_statement_detail(wb["39.1"], period, detail_rows)
 
     # 정규명(정규화 키) → Aggregate
     by_key: dict[str, Aggregate] = {}
