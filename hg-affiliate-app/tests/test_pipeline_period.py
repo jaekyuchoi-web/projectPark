@@ -70,6 +70,47 @@ def _make_period_template(path):
     wb.save(path)
 
 
+def test_run_pipeline_blocks_when_current_ledger_is_missing_without_leaking_details(
+    tmp_path, monkeypatch
+):
+    from app import pipeline
+
+    sentinel = "LOW_LEVEL_LEDGER_EXCEPTION_SENTINEL"
+    statement_writer_called = False
+
+    def fail_if_statement_writer_called(*args, **kwargs):
+        nonlocal statement_writer_called
+        statement_writer_called = True
+        raise RuntimeError(sentinel)
+
+    monkeypatch.setattr(pipeline, "build_statement", fail_if_statement_writer_called)
+
+    outcome = run_pipeline(
+        _slots(None),
+        _SETTINGS,
+        tmp_path,
+        slot_filenames={"current_ledger": sentinel},
+        period=Period(2026, 2),
+    )
+
+    assert outcome.ok is False
+    assert outcome.message == "당기 상세 거래 검증에 실패하여 다운로드를 차단했습니다."
+    assert set(outcome.outputs) == {"오류목록"}
+    assert statement_writer_called is False
+
+    error_book = load_workbook(outcome.outputs["오류목록"], data_only=True)
+    error_values = {
+        str(cell.value)
+        for row in error_book.active.iter_rows()
+        for cell in row
+        if cell.value is not None
+    }
+    error_book.close()
+    assert "당기 상세 검증 실패" in error_values
+    assert all(sentinel not in value for value in error_values)
+    assert all(str(tmp_path) not in value for value in error_values)
+
+
 def test_run_pipeline_blocks_on_unparseable_ledger_date(tmp_path):
     # 날짜 해석 불가 셀 + AI 키 없음 → 엄격 차단(다운로드 차단)
     led = tmp_path / "ledger.xlsx"

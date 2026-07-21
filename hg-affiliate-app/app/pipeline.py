@@ -252,6 +252,23 @@ def run_pipeline(
     ledger = _best_frame(slot_paths.get("current_ledger"))
     current_balance = _balance_long_frame(slot_paths.get("current_balance"))
 
+    if ledger is None:
+        errors.add(
+            "당기 상세 검증 실패",
+            "39.1 상세 거래",
+            "당기 상세 거래를 안전하게 구성하지 못했습니다.",
+            "당기 원장의 필수 열과 선택 기간을 확인하세요.",
+        )
+        error_wb = build_error_report(errors)
+        error_path = output_dir / "오류목록.xlsx"
+        error_wb.save(error_path)
+        return PipelineOutcome(
+            ok=False,
+            message="당기 상세 거래 검증에 실패하여 다운로드를 차단했습니다.",
+            outputs={"오류목록": error_path},
+            error_count=errors.count,
+        )
+
     # 1.5) 당기 데이터 추출 — 선택된 당기 기간(해당년도 1월~분기말월)으로 원장을 자른다.
     #   날짜 컬럼 미식별 / AI 보조 후에도 미파싱 셀이 남으면 엄격 차단(다운로드 차단).
     if period is not None and ledger is not None:
