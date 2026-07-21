@@ -213,6 +213,13 @@ def test_aggregate_ledger_avoids_iterrows_for_period_metadata(monkeypatch):
     attrs = ledger.attrs
     ledger.attrs["period_year_months"] = metadata
 
+    class DeepcopyBomb:
+        def __deepcopy__(self, memo):
+            raise AssertionError("filtered ledger attrs must not be deep-copied")
+
+    bomb = DeepcopyBomb()
+    ledger.attrs["copy_bomb"] = bomb
+
     def fail_if_iterrows_called(self):
         raise AssertionError("ledger aggregation must not use DataFrame.iterrows()")
 
@@ -231,6 +238,7 @@ def test_aggregate_ledger_avoids_iterrows_for_period_metadata(monkeypatch):
 
     assert ledger.attrs is attrs
     assert ledger.attrs["period_year_months"] is metadata
+    assert ledger.attrs["copy_bomb"] is bomb
     assert result.get("특관자A").sales == 100.0
 
 

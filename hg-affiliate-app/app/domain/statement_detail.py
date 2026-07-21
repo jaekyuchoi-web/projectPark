@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import pandas as pd
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
+from ..excel_io import DEDUPLICATED_HEADER_BASES_ATTR
 from . import columns as C
 from .period_extract import PERIOD_YEARMONTH_ATTR, Period, parse_year_month
 
@@ -187,6 +188,26 @@ def build_statement_detail(
     account_code_col = _exact_column(ledger, "계정코드")
     description_col = _exact_column(ledger, "적요", "적요란")
     partner_code_col = _exact_column(ledger, "거래처코드")
+    deduplicated_bases = ledger.attrs.get(DEDUPLICATED_HEADER_BASES_ATTR, frozenset())
+    if not isinstance(deduplicated_bases, (set, frozenset)):
+        raise StatementDetailError("39.1 상세 거래 필수 열을 식별하지 못했습니다.")
+    selected_columns = (
+        account_col,
+        partner_col,
+        date_col,
+        debit_col,
+        credit_col,
+        balance_col,
+        account_code_col,
+        description_col,
+        partner_code_col,
+    )
+    if any(
+        column in deduplicated_bases
+        for column in selected_columns
+        if column is not None
+    ):
+        raise StatementDetailError("39.1 상세 거래 필수 열을 식별하지 못했습니다.")
     positions = _column_positions(
         ledger,
         account_col,
@@ -224,7 +245,7 @@ def build_statement_detail(
             raise StatementDetailError("상세 거래의 기간 메타데이터가 유효하지 않습니다.")
     rows: list[StatementDetailRow] = []
 
-    for position, source in enumerate(ledger.itertuples(index=False, name=None)):
+    for position, source in enumerate(C.array_rows(ledger)):
         partner_name = str(source[partner_position]).strip()
         canonical_name = mapping.get(partner_name)
         if canonical_name not in canonical:

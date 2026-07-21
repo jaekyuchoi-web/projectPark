@@ -208,17 +208,17 @@ def _verify_reconstruction(
         ledger_net: dict[str, float] = {}
         partner_col = C.resolve_column(ledger, "partner")
         if partner_col:
-            positions = C.tuple_column_positions(ledger)
-            for row in ledger.itertuples(index=False, name=None):
-                raw = str(C.tuple_row_value(row, positions, partner_col, "")).strip()
+            positions = C.array_column_positions(ledger)
+            for row in C.array_rows(ledger):
+                raw = str(C.array_row_value(row, positions, partner_col, "")).strip()
                 canon = mapping.get(raw)
                 if not canon or canon not in canonical:
                     continue
                 if C.match_bucket(
-                    str(C.tuple_row_value(row, positions, acc_col, "")), kws
+                    str(C.array_row_value(row, positions, acc_col, "")), kws
                 ):
-                    d = C.to_number(C.tuple_row_value(row, positions, debit_col))
-                    c = C.to_number(C.tuple_row_value(row, positions, credit_col))
+                    d = C.to_number(C.array_row_value(row, positions, debit_col))
+                    c = C.to_number(C.array_row_value(row, positions, credit_col))
                     delta = (d - c) if kind == "asset" else (c - d)
                     ledger_net[canon] = ledger_net.get(canon, 0.0) + delta
         for canon in canonical:

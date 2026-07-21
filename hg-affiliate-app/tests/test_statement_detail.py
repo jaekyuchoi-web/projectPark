@@ -5,6 +5,7 @@ import datetime as dt
 import pandas as pd
 import pytest
 
+from app import excel_io
 from app.domain.period_extract import Period, extract_current_period, parse_year_month
 from app.domain.statement_detail import (
     StatementDetailError,
@@ -29,6 +30,11 @@ def _ledger(rows: list[tuple[str, str, str]]) -> pd.DataFrame:
             for date, account, description in rows
         ]
     )
+
+
+class _DeepcopyBomb:
+    def __deepcopy__(self, memo):
+        raise AssertionError("filtered ledger attrs must not be deep-copied")
 
 
 def test_q2_detail_is_january_through_june_not_april_through_june():
@@ -98,6 +104,8 @@ def test_detail_avoids_iterrows_and_preserves_row_aligned_period_metadata(
     metadata = [(2026, 1), (2026, 6), (2026, 6)]
     attrs = ledger.attrs
     ledger.attrs["period_year_months"] = metadata
+    bomb = _DeepcopyBomb()
+    ledger.attrs["copy_bomb"] = bomb
 
     def fail_if_iterrows_called(self):
         raise AssertionError("detail construction must not use DataFrame.iterrows()")
@@ -113,6 +121,7 @@ def test_detail_avoids_iterrows_and_preserves_row_aligned_period_metadata(
 
     assert ledger.attrs is attrs
     assert ledger.attrs["period_year_months"] is metadata
+    assert ledger.attrs["copy_bomb"] is bomb
     assert [
         (
             row.date,
@@ -151,6 +160,63 @@ def test_detail_fails_closed_for_duplicate_selected_column(column, position):
         )
 
     assert column not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("duplicate", ["차변", "거래처명", "적요"])
+def test_detail_rejects_deduplicated_selected_source_headers_after_extraction(
+    duplicate,
+):
+    headers = ["계정명", "날짜", "거래처명", "적요", "차변", "대변"]
+    values = ["상품매출", "2026-06-30", "특관자A", "source duplicate", "0", "100"]
+    position = headers.index(duplicate) + 1
+    headers.insert(position, duplicate)
+    values.insert(position, "duplicate")
+    normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
+
+    assert normalized.attrs[excel_io.DEDUPLICATED_HEADER_BASES_ATTR] == frozenset(
+        {duplicate}
+    )
+    extracted = extract_current_period(normalized, Period(2026, 2))
+    assert extracted.ok is True
+    assert extracted.df.attrs[excel_io.DEDUPLICATED_HEADER_BASES_ATTR] == frozenset(
+        {duplicate}
+    )
+
+    with pytest.raises(StatementDetailError, match="필수 열") as exc_info:
+        build_statement_detail(
+            extracted.df,
+            mapping={"특관자A": "특관자A"},
+            canonical={"특관자A"},
+            period=Period(2026, 2),
+        )
+
+    assert duplicate not in str(exc_info.value)
+
+
+def test_detail_allows_unique_and_irrelevant_deduplicated_source_headers():
+    headers = ["계정명", "날짜", "거래처명", "적요", "차변", "대변", "비고", "비고"]
+    values = ["상품매출", "2026-06-30", "특관자A", "normal", "0", "100", "", ""]
+    normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
+    extracted = extract_current_period(normalized, Period(2026, 2))
+
+    assert normalized.attrs[excel_io.DEDUPLICATED_HEADER_BASES_ATTR] == frozenset({"비고"})
+    assert extracted.ok is True
+    assert len(
+        build_statement_detail(
+            extracted.df,
+            mapping={"특관자A": "특관자A"},
+            canonical={"특관자A"},
+            period=Period(2026, 2),
+        )
+    ) == 1
+
+
+def test_normalized_unique_source_headers_do_not_set_duplicate_contract():
+    headers = ["계정명", "날짜", "거래처명", "적요", "차변", "대변"]
+    values = ["상품매출", "2026-06-30", "특관자A", "normal", "0", "100"]
+    normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
+
+    assert excel_io.DEDUPLICATED_HEADER_BASES_ATTR not in normalized.attrs
 
 
 def test_detail_excludes_non_related_parties():

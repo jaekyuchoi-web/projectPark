@@ -56,9 +56,9 @@ def _iter_rows(df: pd.DataFrame, mapping: dict[str, str], canonical: set[str]):
     partner_col = C.resolve_column(df, "partner")
     if partner_col is None:
         return
-    positions = C.tuple_column_positions(df)
-    for row in df.itertuples(index=False, name=None):
-        raw = str(C.tuple_row_value(row, positions, partner_col, "")).strip()
+    positions = C.array_column_positions(df)
+    for row in C.array_rows(df):
+        raw = str(C.array_row_value(row, positions, partner_col, "")).strip()
         if not raw or raw == "nan":
             continue
         canon = mapping.get(raw)
@@ -91,9 +91,9 @@ def aggregate_ledger(
     accrued_net: dict[str, float] = {}  # 원장상 미수수익 순증 (대변-차변 아님: 자산이므로 차변-대변)
 
     for canon, row, positions in _iter_rows(ledger, mapping, canonical):
-        acc = str(C.tuple_row_value(row, positions, acc_col, ""))
-        debit = C.to_number(C.tuple_row_value(row, positions, debit_col))
-        credit = C.to_number(C.tuple_row_value(row, positions, credit_col))
+        acc = str(C.array_row_value(row, positions, acc_col, ""))
+        debit = C.to_number(C.array_row_value(row, positions, debit_col))
+        credit = C.to_number(C.array_row_value(row, positions, credit_col))
         agg = result.get(canon)
 
         # 매출 (대변-차변)
@@ -150,10 +150,10 @@ def _balance_by_canon(
     if acc_col is None or amt_col is None:
         return out
     for canon, row, positions in _iter_rows(balance, mapping, canonical):
-        acc = str(C.tuple_row_value(row, positions, acc_col, ""))
+        acc = str(C.array_row_value(row, positions, acc_col, ""))
         if C.match_bucket(acc, keywords, exclude):
             out[canon] = out.get(canon, 0.0) + C.to_number(
-                C.tuple_row_value(row, positions, amt_col)
+                C.array_row_value(row, positions, amt_col)
             )
     return out
 

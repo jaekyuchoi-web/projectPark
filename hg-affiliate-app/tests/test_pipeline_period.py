@@ -25,6 +25,15 @@ def _make_ledger(path, rows):
     wb.save(path)
 
 
+def _make_ledger_with_headers(path, headers, values):
+    wb = Workbook()
+    ws = wb.active
+    ws.append(headers)
+    ws.append(values)
+    wb.save(path)
+    wb.close()
+
+
 def _make_ledger_with_literal_description(path, description: str) -> None:
     wb = Workbook()
     ws = wb.active
@@ -84,6 +93,36 @@ def test_run_pipeline_no_block_when_dates_clean(tmp_path):
     outcome = run_pipeline(_slots(led), _SETTINGS, tmp_path, period=Period(2026, 1))
     # 날짜 차단 메시지가 아니어야 한다(다른 사유로 ok 여부는 무관)
     assert "날짜" not in outcome.message
+
+
+@pytest.mark.parametrize("duplicate", ["차변", "거래처명"])
+def test_run_pipeline_blocks_deduplicated_required_uploaded_header(
+    tmp_path, duplicate
+):
+    headers = ["계정명", "날짜", "거래처명", "차변", "대변"]
+    values = ["상품매출", "2026-06-30", "특관자A", "0", "100"]
+    position = headers.index(duplicate) + 1
+    headers.insert(position, duplicate)
+    values.insert(position, "duplicate")
+    ledger = tmp_path / "duplicate-header-ledger.xlsx"
+    _make_ledger_with_headers(ledger, headers, values)
+
+    outcome = run_pipeline(
+        _slots(ledger), _SETTINGS, tmp_path, period=Period(2026, 2)
+    )
+
+    assert outcome.ok is False
+    assert outcome.message == "당기 상세 거래 검증에 실패하여 다운로드를 차단했습니다."
+    assert set(outcome.outputs) == {"오류목록"}
+    error_book = load_workbook(outcome.outputs["오류목록"], data_only=True)
+    error_values = {
+        str(cell.value)
+        for row in error_book.active.iter_rows()
+        for cell in row
+        if cell.value is not None
+    }
+    error_book.close()
+    assert duplicate not in error_values
 
 
 def test_run_pipeline_q2_uses_january_through_june_for_summary_and_detail(
@@ -217,6 +256,13 @@ def test_reconstruction_avoids_iterrows_for_period_metadata(monkeypatch):
     attrs = ledger.attrs
     ledger.attrs["period_year_months"] = metadata
 
+    class DeepcopyBomb:
+        def __deepcopy__(self, memo):
+            raise AssertionError("filtered ledger attrs must not be deep-copied")
+
+    bomb = DeepcopyBomb()
+    ledger.attrs["copy_bomb"] = bomb
+
     def fail_if_iterrows_called(self):
         raise AssertionError("ledger reconstruction must not use DataFrame.iterrows()")
 
@@ -234,6 +280,7 @@ def test_reconstruction_avoids_iterrows_for_period_metadata(monkeypatch):
 
     assert ledger.attrs is attrs
     assert ledger.attrs["period_year_months"] is metadata
+    assert ledger.attrs["copy_bomb"] is bomb
     assert errors.count == 0
 
 

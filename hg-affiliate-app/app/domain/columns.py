@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from typing import Any
 
 import pandas as pd
 
@@ -119,18 +120,23 @@ def to_number(value) -> float:
     return -num if neg else num
 
 
-def tuple_column_positions(df: pd.DataFrame) -> dict[str, int]:
-    """Return the tuple position for each normalized frame column name."""
+def array_rows(df: pd.DataFrame):
+    """Return object rows without creating pandas Series or finalizing attrs."""
+    return df.to_numpy(dtype=object, copy=False)
+
+
+def array_column_positions(df: pd.DataFrame) -> dict[str, int]:
+    """Return the array position for each normalized frame column name."""
     return {str(column): position for position, column in enumerate(df.columns)}
 
 
-def tuple_row_value(
-    row: tuple[object, ...],
+def array_row_value(
+    row: Any,
     positions: dict[str, int],
     column: str | None,
     default: object = None,
 ) -> object:
-    """Read a named value from an ``itertuples`` row with Series.get semantics."""
+    """Read a named value from an object-array row with Series.get semantics."""
     if column is None:
         return default
     position = positions.get(column)
