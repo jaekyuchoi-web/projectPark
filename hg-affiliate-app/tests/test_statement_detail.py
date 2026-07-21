@@ -193,6 +193,63 @@ def test_detail_rejects_deduplicated_selected_source_headers_after_extraction(
     assert duplicate not in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    ("first_header", "second_header", "first_value", "second_value"),
+    [
+        ("적요", "적 요", "PRIVATE_DESCRIPTION_ONE", "PRIVATE_DESCRIPTION_TWO"),
+        ("잔액", "잔 액", "PRIVATE_BALANCE_ONE", "PRIVATE_BALANCE_TWO"),
+    ],
+)
+def test_detail_rejects_whitespace_equivalent_selected_headers_after_extraction(
+    first_header,
+    second_header,
+    first_value,
+    second_value,
+):
+    headers = [
+        "계정명",
+        "날짜",
+        "거래처명",
+        "차변",
+        "대변",
+        first_header,
+        second_header,
+    ]
+    values = [
+        "상품매출",
+        "2026-06-30",
+        "특관자A",
+        "0",
+        "100",
+        first_value,
+        second_value,
+    ]
+    normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
+
+    assert normalized.attrs[excel_io.DEDUPLICATED_HEADER_BASES_ATTR] == frozenset(
+        {first_header, second_header}
+    )
+    extracted = extract_current_period(normalized, Period(2026, 2))
+    assert extracted.ok is True
+    assert extracted.df.attrs[excel_io.DEDUPLICATED_HEADER_BASES_ATTR] == frozenset(
+        {first_header, second_header}
+    )
+
+    with pytest.raises(StatementDetailError, match="필수 열") as exc_info:
+        build_statement_detail(
+            extracted.df,
+            mapping={"특관자A": "특관자A"},
+            canonical={"특관자A"},
+            period=Period(2026, 2),
+        )
+
+    error = str(exc_info.value)
+    assert first_header not in error
+    assert second_header not in error
+    assert first_value not in error
+    assert second_value not in error
+
+
 def test_detail_allows_unique_and_irrelevant_deduplicated_source_headers():
     headers = ["계정명", "날짜", "거래처명", "적요", "차변", "대변", "비고", "비고"]
     values = ["상품매출", "2026-06-30", "특관자A", "normal", "0", "100", "", ""]
@@ -209,6 +266,26 @@ def test_detail_allows_unique_and_irrelevant_deduplicated_source_headers():
             period=Period(2026, 2),
         )
     ) == 1
+
+
+def test_detail_allows_whitespace_equivalent_irrelevant_source_headers():
+    headers = ["계정명", "날짜", "거래처명", "적요", "차변", "대변", "비고", "비 고"]
+    values = ["상품매출", "2026-06-30", "특관자A", "normal", "0", "100", "one", "two"]
+    normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
+    extracted = extract_current_period(normalized, Period(2026, 2))
+
+    assert normalized.attrs[excel_io.DEDUPLICATED_HEADER_BASES_ATTR] == frozenset(
+        {"비고", "비 고"}
+    )
+    assert extracted.ok is True
+    rows = build_statement_detail(
+        extracted.df,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )
+
+    assert len(rows) == 1
 
 
 def test_normalized_unique_source_headers_do_not_set_duplicate_contract():
@@ -283,10 +360,28 @@ def test_detail_prefers_balance_specific_column_over_generic_amount():
     assert row.balance == 321.0
 
 
+def test_detail_prefers_exact_current_balance_over_leading_opening_balance():
+    ledger = _ledger([("2026-06-30", "상품매출", "current balance")]).drop(
+        columns=["잔액"]
+    )
+    ledger["기초잔액"] = "111"
+    ledger["잔액"] = "321"
+
+    row = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )[0]
+
+    assert row.balance == 321.0
+
+
 def test_detail_uses_generic_amount_only_when_balance_column_is_absent():
     ledger = _ledger([("2026-06-30", "상품매출", "amount fallback")]).drop(
         columns=["잔액"]
     )
+    ledger["기초잔액"] = "111"
     ledger["금액"] = "654"
 
     row = build_statement_detail(
@@ -297,6 +392,22 @@ def test_detail_uses_generic_amount_only_when_balance_column_is_absent():
     )[0]
 
     assert row.balance == 654.0
+
+
+def test_detail_does_not_treat_lone_opening_balance_as_current_balance():
+    ledger = _ledger([("2026-06-30", "상품매출", "opening only")]).drop(
+        columns=["잔액"]
+    )
+    ledger["기초잔액"] = "111"
+
+    row = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )[0]
+
+    assert row.balance == 0.0
 
 
 def test_detail_row_categories_follow_aggregate_row_eligibility_rules():

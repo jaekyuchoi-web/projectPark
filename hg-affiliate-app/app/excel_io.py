@@ -12,8 +12,8 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
+import re
 
 import pandas as pd
 
@@ -123,8 +123,15 @@ def normalized_frame(df: pd.DataFrame) -> pd.DataFrame:
     hr = detect_header_row(df)
     header = [str(v).strip() for v in df.iloc[hr].tolist()]
     bases = [name if name and name != "nan" else "col" for name in header]
+    semantic_groups: dict[str, list[str]] = {}
+    for base in bases:
+        key = re.sub(r"[\s\u3000]", "", base).casefold()
+        semantic_groups.setdefault(key, []).append(base)
     deduplicated_bases = frozenset(
-        name for name, count in Counter(bases).items() if count > 1
+        base
+        for group in semantic_groups.values()
+        if len(group) > 1
+        for base in group
     )
     body = df.iloc[hr + 1 :].copy()
     body.columns = _dedupe(header)

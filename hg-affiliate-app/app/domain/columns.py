@@ -57,17 +57,17 @@ def resolve_ledger_balance_column(df: pd.DataFrame) -> str | None:
     """Resolve the 39.1 balance column, using generic amount only as fallback."""
     columns = [str(column) for column in df.columns]
     compact = {
-        re.sub(r"[\s\u3000]", "", column).lower(): column
+        re.sub(r"[\s\u3000]", "", column).casefold(): column
         for column in columns
     }
 
     for alias in ("잔액", "기말잔액", "당기잔액", "balance"):
-        for key, column in compact.items():
-            if alias in key:
-                return column
+        exact = compact.get(alias.casefold())
+        if exact is not None:
+            return exact
 
     for alias in ("금액", "amount"):
-        exact = compact.get(alias)
+        exact = compact.get(alias.casefold())
         if exact is not None:
             return exact
     return None
