@@ -50,7 +50,7 @@ def _scan_workbook_for_errors(path: Path) -> str | None:
             for row in ws.iter_rows():
                 for cell in row:
                     v = cell.value
-                    if isinstance(v, str) and v.strip() in ERROR_TOKENS:
+                    if cell.data_type == "e" and v in ERROR_TOKENS:
                         return f"{ws.title}!{cell.coordinate}"
     finally:
         wb.close()
@@ -65,7 +65,13 @@ def _scan_formulas_static(path: Path) -> str | None:
             for row in ws.iter_rows():
                 for cell in row:
                     v = cell.value
-                    if isinstance(v, str) and any(tok in v for tok in ERROR_TOKENS):
+                    if cell.data_type == "e" and v in ERROR_TOKENS:
+                        return f"{ws.title}!{cell.coordinate}"
+                    if (
+                        cell.data_type == "f"
+                        and isinstance(v, str)
+                        and any(tok in v for tok in ERROR_TOKENS)
+                    ):
                         return f"{ws.title}!{cell.coordinate}"
     finally:
         wb.close()

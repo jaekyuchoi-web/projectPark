@@ -23,6 +23,17 @@ def _make_ledger(path, rows):
     wb.save(path)
 
 
+def _make_ledger_with_literal_description(path, description: str) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["계정명", "날짜", "거래처명", "적요", "차변", "대변"])
+    ws.append(["상품매출", "2026-06-30", "특관자A", description, "0", "100"])
+    description_cell = ws.cell(row=2, column=4)
+    description_cell.data_type = "s"
+    wb.save(path)
+    wb.close()
+
+
 def _slots(ledger=None):
     return {
         "prev_balance": None,
@@ -139,6 +150,39 @@ def test_run_pipeline_q2_uses_january_through_june_for_summary_and_detail(
         for row in range(16, detail.max_row + 1)
     }
     workbook.close()
+
+
+def test_run_pipeline_q2_preserves_string_typed_error_looking_description_with_static_validation(
+    tmp_path, monkeypatch
+):
+    from app import output_check, pipeline
+    from app.domain import statement
+
+    template = tmp_path / "template.xlsx"
+    _make_period_template(template)
+    monkeypatch.setattr(statement, "TEMPLATE_PATH", template)
+    monkeypatch.setattr(output_check, "_find_soffice", lambda: None)
+    monkeypatch.setattr(pipeline, "verify_output", output_check.verify_output)
+    ledger = tmp_path / "ledger.xlsx"
+    _make_ledger_with_literal_description(ledger, "#REF!")
+
+    outcome = run_pipeline(
+        _slots(ledger),
+        _SETTINGS,
+        tmp_path,
+        period=Period(2026, 2),
+    )
+
+    assert outcome.ok is True
+    statement_path = outcome.outputs["당기_특관자_명세서"]
+    assert statement_path.name == "당기_특관자_명세서_2026_2Q.xlsx"
+    workbook = load_workbook(statement_path, data_only=False)
+    try:
+        description = workbook["39.1"]["J16"]
+        assert description.value == "#REF!"
+        assert description.data_type == "s"
+    finally:
+        workbook.close()
 
 
 def test_run_pipeline_blocks_detail_failure_without_leaking_accounting_values(
