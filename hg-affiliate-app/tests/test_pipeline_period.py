@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from openpyxl import Workbook, load_workbook
 
 from app.config import Settings
@@ -169,3 +170,46 @@ def test_run_pipeline_blocks_detail_failure_without_leaking_accounting_values(
     error_book.close()
     assert "당기 상세 검증 실패" in error_values
     assert secret not in error_values
+
+
+@pytest.mark.parametrize("failure_stage", ["build", "save"])
+def test_run_pipeline_statement_writer_failure_is_generic_and_never_leaks_exception(
+    tmp_path, monkeypatch, failure_stage
+):
+    from app import pipeline
+
+    sentinel = "TRANSACTION_SENTINEL_SHOULD_NEVER_ESCAPE"
+    ledger = tmp_path / "ledger.xlsx"
+    _make_ledger(ledger, [["상품매출", "2026-06-30", "특관자A", "0", "100"]])
+
+    if failure_stage == "build":
+        def fail_build(*args, **kwargs):
+            raise RuntimeError(sentinel)
+
+        monkeypatch.setattr(pipeline, "build_statement", fail_build)
+    else:
+        class FailingWorkbook:
+            def save(self, path):
+                raise RuntimeError(sentinel)
+
+        monkeypatch.setattr(
+            pipeline,
+            "build_statement",
+            lambda *args, **kwargs: (FailingWorkbook(), []),
+        )
+
+    outcome = run_pipeline(_slots(ledger), _SETTINGS, tmp_path, period=Period(2026, 2))
+
+    assert outcome.ok is False
+    assert outcome.message == "당기 특관자 명세서 생성에 실패하여 다운로드를 차단했습니다."
+    assert sentinel not in outcome.message
+    assert set(outcome.outputs) == {"오류목록"}
+    error_book = load_workbook(outcome.outputs["오류목록"], data_only=True)
+    error_values = [
+        str(cell.value)
+        for row in error_book.active.iter_rows()
+        for cell in row
+        if cell.value is not None
+    ]
+    error_book.close()
+    assert all(sentinel not in value for value in error_values)

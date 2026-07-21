@@ -27,11 +27,12 @@ from copy import copy
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.formula import Tokenizer
 
 from ..normalize import _norm_key
 from .aggregate import Aggregate, AggregateResult
 from .period_extract import Period
-from .statement_detail import StatementDetailRow
+from .statement_detail import StatementDetailRow, write_detail_cell
 
 # 39.2 블록 좌표(헤더 검증 포함)
 _B1_FIRST, _B1_LAST = 3, 44       # 블록1: 거래(38.1)
@@ -65,21 +66,98 @@ _ERR_TOKENS = ("#REF!", "#VALUE!", "#DIV/0!", "#NAME?", "#N/A", "#NULL!", "#NUM!
 _DETAIL_FIRST_ROW = 16
 _DETAIL_FIRST_COL = 2
 _DETAIL_LAST_COL = 16
-_DETAIL_RANGE_RE = re.compile(
-    r"(?P<prefix>\$?(?P<col>[B-P])\$?16:\$?(?P=col)\$?)\d+"
+_DETAIL_TOKEN_RANGE_RE = re.compile(
+    r"(?P<start_col>\$?[A-Za-z]{1,3})(?P<start_row>\$?\d+):"
+    r"(?P<end_col>\$?[A-Za-z]{1,3})(?P<end_row>\$?\d+)"
 )
 
 
+class StatementTemplateError(ValueError):
+    """The statement template cannot be updated safely."""
+
+
+def _parse_detail_range_token(value: str, sheet_title: str):
+    qualifier = ""
+    reference = value
+    if "!" in value:
+        sheet, reference = value.rsplit("!", 1)
+        qualifier = f"{sheet}!"
+        if sheet.startswith("'") and sheet.endswith("'"):
+            sheet = sheet[1:-1].replace("''", "'")
+        if sheet.casefold() != sheet_title.casefold():
+            return None
+
+    match = _DETAIL_TOKEN_RANGE_RE.fullmatch(reference)
+    if match is None:
+        return None
+    start_col = match.group("start_col").replace("$", "").upper()
+    end_col = match.group("end_col").replace("$", "").upper()
+    start_row = int(match.group("start_row").replace("$", ""))
+    if (
+        start_col != end_col
+        or start_col not in tuple("BCDEFGHIJKLMNOP")
+        or start_row != 16
+    ):
+        return None
+    return qualifier, reference, match
+
+
+def _rewrite_detail_range_token(value: str, sheet_title: str, last_row: int) -> str | None:
+    parsed = _parse_detail_range_token(value, sheet_title)
+    if parsed is None:
+        return None
+    qualifier, reference, match = parsed
+
+    end_row = match.group("end_row")
+    end_marker = "$" if end_row.startswith("$") else ""
+    rewritten = (
+        reference[: match.start("end_row")]
+        + end_marker
+        + str(last_row)
+        + reference[match.end("end_row") :]
+    )
+    return qualifier + rewritten
+
+
 def _rewrite_detail_formula_ranges(ws, last_row: int) -> None:
-    for row in ws.iter_rows(min_row=1, max_row=_DETAIL_FIRST_ROW - 1):
-        for cell in row:
-            formula = cell.value
-            if not isinstance(formula, str) or not formula.startswith("="):
-                continue
-            cell.value = _DETAIL_RANGE_RE.sub(
-                lambda match: f"{match.group('prefix')}{last_row}",
-                formula,
-            )
+    recognized = 0
+    try:
+        for row in ws.iter_rows(min_row=1, max_row=_DETAIL_FIRST_ROW - 1):
+            for cell in row:
+                formula = cell.value
+                if not isinstance(formula, str) or not formula.startswith("="):
+                    continue
+                tokenizer = Tokenizer(formula)
+                changed = False
+                for token in tokenizer.items:
+                    if token.type != "OPERAND" or token.subtype != "RANGE":
+                        continue
+                    rewritten = _rewrite_detail_range_token(
+                        token.value, ws.title, last_row
+                    )
+                    if rewritten is None:
+                        continue
+                    token.value = rewritten
+                    verified = _parse_detail_range_token(token.value, ws.title)
+                    if verified is None:
+                        raise StatementTemplateError
+                    endpoint = int(
+                        verified[2].group("end_row").replace("$", "")
+                    )
+                    if endpoint != last_row:
+                        raise StatementTemplateError
+                    recognized += 1
+                    changed = True
+                if changed:
+                    cell.value = tokenizer.render()
+    except Exception as exc:
+        raise StatementTemplateError(
+            "39.1 요약 수식을 안전하게 갱신하지 못했습니다."
+        ) from exc
+    if recognized == 0:
+        raise StatementTemplateError(
+            "39.1 요약 수식을 안전하게 갱신하지 못했습니다."
+        )
 
 
 def _write_statement_detail(
@@ -110,7 +188,8 @@ def _write_statement_detail(
             ws.row_dimensions[target_row].height = source_height
         for index, value in enumerate(detail.as_excel_row()):
             column = _DETAIL_FIRST_COL + index
-            target = ws.cell(row=target_row, column=column, value=value)
+            target = ws.cell(row=target_row, column=column)
+            write_detail_cell(target, value)
             source = style_source[index]
             target._style = copy(source._style)
             target.number_format = source.number_format

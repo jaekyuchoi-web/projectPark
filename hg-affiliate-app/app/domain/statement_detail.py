@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 
 import pandas as pd
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
 from . import columns as C
 from .period_extract import PERIOD_YEARMONTH_ATTR, Period, parse_year_month
@@ -14,6 +15,19 @@ from .period_extract import PERIOD_YEARMONTH_ATTR, Period, parse_year_month
 
 class StatementDetailError(ValueError):
     """The filtered ledger cannot safely become statement detail."""
+
+
+def write_detail_cell(cell, value: object) -> None:
+    """Write a detail value without treating user text as a formula."""
+    if isinstance(value, str):
+        if ILLEGAL_CHARACTERS_RE.search(value):
+            raise StatementDetailError(
+                "39.1 상세 거래를 안전하게 기록하지 못했습니다."
+            )
+        cell.value = value
+        cell.data_type = "s"
+        return
+    cell.value = value
 
 
 @dataclass(frozen=True)
@@ -101,6 +115,9 @@ def _is_valid_year_month_pair(value: object) -> bool:
 
 def _classify(
     account: object,
+    debit: float,
+    credit: float,
+    row_values: list[object],
 ) -> tuple[str | None, str | None, str | None, str | None, str | None]:
     name = str(account)
     sales_purchase = None
@@ -115,9 +132,7 @@ def _classify(
         income_expense, bucket = "이자수익", "이자수익"
     elif C.match_bucket(name, C.PURCHASE_KEYWORDS):
         sales_purchase, bucket = "매입", "매입"
-    elif C.match_bucket(name, C.OTHER_EXPENSE_KEYWORDS) or C.match_bucket(
-        name, C.ASSET_ACQUIRE_KEYWORDS
-    ):
+    elif C.is_purchase_other_eligible(name, debit, credit):
         income_expense, bucket = "비용", "기타비용"
 
     for balance_bucket, keywords in C.BALANCE_BUCKETS.items():
@@ -130,7 +145,7 @@ def _classify(
                 bucket = balance_bucket
             break
 
-    if C.match_bucket(name, C.LENDING_KEYWORDS, C.ALLOWANCE_KEYWORDS):
+    if C.is_fund_lending_eligible(name, debit, row_values):
         funding = "자금대여"
 
     return sales_purchase, funding, receivable_payable, income_expense, bucket
@@ -147,7 +162,7 @@ def build_statement_detail(
     date_col = C.resolve_column(ledger, "date")
     debit_col = C.resolve_column(ledger, "debit")
     credit_col = C.resolve_column(ledger, "credit")
-    balance_col = C.resolve_column(ledger, "amount")
+    balance_col = C.resolve_ledger_balance_column(ledger)
     if None in (account_col, partner_col, date_col, debit_col, credit_col):
         raise StatementDetailError("39.1 상세 거래 필수 열을 식별하지 못했습니다.")
 
@@ -178,7 +193,11 @@ def build_statement_detail(
         if year_month is None or not period.contains(*year_month):
             raise StatementDetailError("선택한 누적 기간 밖의 상세 거래가 발견되었습니다.")
 
-        classification = _classify(source.get(account_col))
+        debit = C.to_number(source.get(debit_col))
+        credit = C.to_number(source.get(credit_col))
+        classification = _classify(
+            source.get(account_col), debit, credit, source.tolist()
+        )
         rows.append(
             StatementDetailRow(
                 *classification,
@@ -189,8 +208,8 @@ def build_statement_detail(
                 partner_code=source.get(partner_code_col, "") if partner_code_col else "",
                 partner_name=partner_name,
                 canonical_name=canonical_name,
-                debit=C.to_number(source.get(debit_col)),
-                credit=C.to_number(source.get(credit_col)),
+                debit=debit,
+                credit=credit,
                 balance=C.to_number(source.get(balance_col)) if balance_col else 0.0,
             )
         )

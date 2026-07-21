@@ -4,12 +4,12 @@ from pathlib import Path
 from zipfile import BadZipFile
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 
 from app.domain.aggregate import AggregateResult
 from app.domain.period_extract import Period
-from app.domain.statement_detail import StatementDetailRow
+from app.domain.statement_detail import StatementDetailError, StatementDetailRow
 from app.domain.statement_template import fill_statement_template
 
 
@@ -76,6 +76,137 @@ def test_template_replaces_stale_q1_detail_with_q2_ytd_rows(tmp_path):
     assert detail["C4"].value == "=SUMIFS($N$16:$N$17,$F$16:$F$17,$B4)"
     assert detail["P12"].value == "=SUM(P16:P17)"
     assert detail["B17"].fill.fgColor.rgb == detail["B16"].fill.fgColor.rgb
+
+
+def test_template_writer_preserves_equals_prefixed_detail_as_literal_text(tmp_path):
+    template = tmp_path / "template.xlsx"
+    output = tmp_path / "output.xlsx"
+    _write_template(template)
+
+    wb, _ = fill_statement_template(
+        template,
+        AggregateResult(),
+        Period(2026, 2),
+        [_row("2026-06-30", "=1+1")],
+    )
+    wb.save(output)
+    wb.close()
+
+    loaded = load_workbook(output, data_only=False)
+    cell = loaded["39.1"]["J16"]
+    assert cell.value == "=1+1"
+    assert cell.data_type == "s"
+    loaded.close()
+
+
+def test_legacy_writer_preserves_equals_prefixed_detail_as_literal_text(
+    tmp_path, monkeypatch
+):
+    from app.domain import statement
+
+    monkeypatch.setattr(statement, "TEMPLATE_PATH", tmp_path / "missing.xlsx")
+    output = tmp_path / "legacy.xlsx"
+    wb, _ = statement.build_statement(
+        AggregateResult(),
+        Period(2026, 2),
+        [_row("2026-06-30", "=1+1")],
+    )
+    wb.save(output)
+    wb.close()
+
+    loaded = load_workbook(output, data_only=False)
+    cell = loaded["39.1"]["J16"]
+    assert cell.value == "=1+1"
+    assert cell.data_type == "s"
+    loaded.close()
+
+
+def test_illegal_detail_text_raises_generic_statement_detail_error(tmp_path):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    secret = "PRIVATE_TRANSACTION\x01SENTINEL"
+
+    with pytest.raises(StatementDetailError) as exc_info:
+        fill_statement_template(
+            template,
+            AggregateResult(),
+            Period(2026, 2),
+            [_row("2026-06-30", secret)],
+        )
+
+    assert str(exc_info.value) == "39.1 상세 거래를 안전하게 기록하지 못했습니다."
+    assert "PRIVATE_TRANSACTION" not in str(exc_info.value)
+
+
+def test_formula_rewrite_changes_only_local_or_self_qualified_detail_ranges(tmp_path):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    wb = load_workbook(template)
+    detail = wb["39.1"]
+    detail["D4"] = (
+        '=SUM(N16:N510)+SUM(\'39.1\'!$P$16:$P$510)'
+        '+SUM(\'39.2\'!B16:B44)+SUM(BA16:BA510)+"N16:N510"'
+    )
+    wb.save(template)
+    wb.close()
+
+    output, _ = fill_statement_template(
+        template,
+        AggregateResult(),
+        Period(2026, 2),
+        [_row("2026-01-03", "January"), _row("2026-06-30", "June")],
+    )
+
+    assert output["39.1"]["D4"].value == (
+        '=SUM(N16:N17)+SUM(\'39.1\'!$P$16:$P$17)'
+        '+SUM(\'39.2\'!B16:B44)+SUM(BA16:BA510)+"N16:N510"'
+    )
+
+
+def test_template_without_recognized_local_detail_summary_range_fails_closed(tmp_path):
+    template = tmp_path / "template.xlsx"
+    wb = Workbook()
+    wb.active.title = "특관자"
+    detail = wb.create_sheet("39.1")
+    wb.create_sheet("39.2")
+    detail["C4"] = "=SUM('39.2'!N16:N510)"
+    wb.save(template)
+    wb.close()
+
+    with pytest.raises(ValueError) as exc_info:
+        fill_statement_template(template, AggregateResult(), Period(2026, 2), [])
+
+    assert str(exc_info.value) == "39.1 요약 수식을 안전하게 갱신하지 못했습니다."
+    assert "N16:N510" not in str(exc_info.value)
+
+
+def test_zero_detail_clears_stale_values_and_sets_local_endpoint_to_row_16(tmp_path):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    wb = load_workbook(template)
+    detail = wb["39.1"]
+    detail["D4"] = (
+        '=SUM(N16:N510)+SUM(\'39.2\'!B16:B44)+"P16:P510"'
+    )
+    detail["P40"] = "STALE_DETAIL"
+    wb.save(template)
+    wb.close()
+
+    output, _ = fill_statement_template(
+        template, AggregateResult(), Period(2026, 2), []
+    )
+    detail = output["39.1"]
+
+    assert all(
+        detail.cell(row=row, column=column).value is None
+        for row in range(16, detail.max_row + 1)
+        for column in range(2, 17)
+    )
+    assert detail["C4"].value == "=SUMIFS($N$16:$N$16,$F$16:$F$16,$B4)"
+    assert detail["P12"].value == "=SUM(P16:P16)"
+    assert detail["D4"].value == (
+        '=SUM(N16:N16)+SUM(\'39.2\'!B16:B44)+"P16:P510"'
+    )
 
 
 def test_existing_broken_template_is_not_silently_hidden_by_fallback(tmp_path, monkeypatch):

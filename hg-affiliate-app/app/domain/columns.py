@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 import pandas as pd
 
@@ -48,6 +49,26 @@ def resolve_column(df: pd.DataFrame, role: str) -> str | None:
         for c in cols:
             if alias in c:
                 return c
+    return None
+
+
+def resolve_ledger_balance_column(df: pd.DataFrame) -> str | None:
+    """Resolve the 39.1 balance column, using generic amount only as fallback."""
+    columns = [str(column) for column in df.columns]
+    compact = {
+        re.sub(r"[\s\u3000]", "", column).lower(): column
+        for column in columns
+    }
+
+    for alias in ("잔액", "기말잔액", "당기잔액", "balance"):
+        for key, column in compact.items():
+            if alias in key:
+                return column
+
+    for alias in ("금액", "amount"):
+        exact = compact.get(alias)
+        if exact is not None:
+            return exact
     return None
 
 
@@ -139,3 +160,27 @@ def match_bucket(account: str, keywords: list[str], exclude: list[str] | None = 
         if re.sub(r"[\s\u3000]", "", kw) in a:
             return True
     return False
+
+
+def is_purchase_other_eligible(account: object, debit: float, credit: float) -> bool:
+    """Whether a ledger row contributes to 38.1 purchase-other."""
+    name = str(account)
+    if match_bucket(name, ASSET_ACQUIRE_KEYWORDS):
+        return True
+    if not match_bucket(name, OTHER_EXPENSE_KEYWORDS):
+        return False
+    return not (match_bucket(name, ["지급임차료"]) and debit - credit < 0)
+
+
+def is_fund_lending_eligible(
+    account: object,
+    debit: float,
+    row_values: Iterable[object],
+) -> bool:
+    """Whether a ledger row is a current-period 38.4 lending increase."""
+    if not match_bucket(str(account), LENDING_KEYWORDS, exclude=ALLOWANCE_KEYWORDS):
+        return False
+    text = " ".join(str(value) for value in row_values)
+    return debit > 0 and not any(
+        token in text for token in FUND_LENDING_CARRYFORWARD_TEXTS
+    )

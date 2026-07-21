@@ -341,20 +341,37 @@ def run_pipeline(
                "인사·급여(임원 식별/배분) 자료가 없어 숫자 공란 처리", "임원 급여 자료로 별도 보완하세요.")
 
     # 7) 출력 생성
-    statement_wb, stmt_unmatched = build_statement(result, period, detail_rows)
-    for canon in stmt_unmatched:
-        errors.add(
-            "템플릿 미반영", canon,
-            "데이터가 있으나 명세서 양식의 특수관계자 행에 없어 자동 반영되지 못함",
-            "특관자 양식에 해당 법인 행을 수기로 추가하거나, 상호정리 표기를 양식과 일치시키세요.",
-        )
-    governance_wb = build_governance(norm.mapping, canonical)
-
     statement_path = output_dir / (
         f"당기_특관자_명세서_{period.year}_{period.quarter}Q.xlsx"
     )
+    try:
+        statement_wb, stmt_unmatched = build_statement(result, period, detail_rows)
+        for canon in stmt_unmatched:
+            errors.add(
+                "템플릿 미반영", canon,
+                "데이터가 있으나 명세서 양식의 특수관계자 행에 없어 자동 반영되지 못함",
+                "특관자 양식에 해당 법인 행을 수기로 추가하거나, 상호정리 표기를 양식과 일치시키세요.",
+            )
+        statement_wb.save(statement_path)
+    except Exception:  # noqa: BLE001 - privacy boundary for template/build/save failures
+        errors.add(
+            "명세서 생성 실패",
+            "당기 특관자 명세서",
+            "명세서 파일을 안전하게 생성하지 못했습니다.",
+            "명세서 템플릿과 출력 경로를 확인한 뒤 다시 실행하세요.",
+        )
+        error_wb = build_error_report(errors)
+        error_path = output_dir / "오류목록.xlsx"
+        error_wb.save(error_path)
+        return PipelineOutcome(
+            ok=False,
+            message="당기 특관자 명세서 생성에 실패하여 다운로드를 차단했습니다.",
+            outputs={"오류목록": error_path},
+            error_count=errors.count,
+        )
+
+    governance_wb = build_governance(norm.mapping, canonical)
     governance_path = output_dir / "지배구조.xlsx"
-    statement_wb.save(statement_path)
     governance_wb.save(governance_path)
 
     # 8) 출력 안전성 검증 (명세서·지배구조)

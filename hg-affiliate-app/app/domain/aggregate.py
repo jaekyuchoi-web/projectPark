@@ -105,14 +105,7 @@ def aggregate_ledger(
         elif C.match_bucket(acc, C.PURCHASE_KEYWORDS):
             agg.purchase += debit - credit
         # 매입등 기타 = 기타비용 순액 + 자산취득
-        elif C.match_bucket(acc, C.OTHER_EXPENSE_KEYWORDS):
-            net = debit - credit
-            # 지급임차료 전대(음수 라인) 제외 → 총액 처리
-            if C.match_bucket(acc, ["지급임차료"]) and net < 0:
-                pass
-            else:
-                agg.purchase_other += net
-        elif C.match_bucket(acc, C.ASSET_ACQUIRE_KEYWORDS):
+        elif C.is_purchase_other_eligible(acc, debit, credit):
             agg.purchase_other += debit - credit
 
         # 미수수익 원장 순증 (잔액증감 역산용)
@@ -120,10 +113,8 @@ def aggregate_ledger(
             accrued_net[canon] = accrued_net.get(canon, 0.0) + (debit - credit)
 
         # 38.4 자금대여 = 단기·장기대여금 차변 증가(이전 기간 블록/충당금 제외)
-        if C.match_bucket(acc, C.LENDING_KEYWORDS, exclude=C.ALLOWANCE_KEYWORDS):
-            text = " ".join(str(row.get(c, "")) for c in ledger.columns)
-            if not any(token in text for token in C.FUND_LENDING_CARRYFORWARD_TEXTS) and debit > 0:
-                agg.fund_lending += debit
+        if C.is_fund_lending_eligible(acc, debit, row.tolist()):
+            agg.fund_lending += debit
 
     # 매출등 기타: 이자수익 + 미수수익 잔액증감 역산(당기말-전기이월-원장순증)
     prev_accrued = _balance_by_canon(prev_balance, mapping, canonical, C.ACCRUED_INCOME_KEYWORDS,

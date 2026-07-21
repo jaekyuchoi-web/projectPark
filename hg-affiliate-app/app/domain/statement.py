@@ -20,7 +20,7 @@ from openpyxl.utils import get_column_letter
 
 from .aggregate import AggregateResult
 from .period_extract import Period
-from .statement_detail import StatementDetailRow
+from .statement_detail import StatementDetailRow, write_detail_cell
 from .statement_template import fill_statement_template
 
 # 고정 템플릿(정답 양식). 존재하면 이 양식으로 산출, 없으면 단순표 폴백.
@@ -103,7 +103,7 @@ def _build_legacy(
         _style_header(note_ws.cell(row=15, column=column, value=header))
     for row_number, detail in enumerate(detail_rows, start=16):
         for column, value in enumerate(detail.as_excel_row(), start=2):
-            note_ws.cell(row=row_number, column=column, value=value)
+            write_detail_cell(note_ws.cell(row=row_number, column=column), value)
 
     # _집계 시트는 데이터 소스이므로 숨김
     data_ws.sheet_state = "hidden"

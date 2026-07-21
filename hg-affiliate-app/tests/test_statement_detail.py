@@ -129,6 +129,71 @@ def test_detail_maps_lending_row_to_existing_b_through_p_contract():
     ]
 
 
+def test_detail_prefers_balance_specific_column_over_generic_amount():
+    ledger = _ledger([("2026-06-30", "상품매출", "balance preference")])
+    ledger["금액"] = "999"
+    ledger["잔액"] = "321"
+
+    row = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )[0]
+
+    assert row.balance == 321.0
+
+
+def test_detail_uses_generic_amount_only_when_balance_column_is_absent():
+    ledger = _ledger([("2026-06-30", "상품매출", "amount fallback")]).drop(
+        columns=["잔액"]
+    )
+    ledger["금액"] = "654"
+
+    row = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )[0]
+
+    assert row.balance == 654.0
+
+
+def test_detail_row_categories_follow_aggregate_row_eligibility_rules():
+    ledger = _ledger(
+        [
+            ("2026-06-01", "단기대여금", "전기 이월"),
+            ("2026-06-02", "단기대여금", "대여금 상환"),
+            ("2026-06-03", "대손충당금(단기대여금)", "충당금"),
+            ("2026-06-04", "단기대여금", "당기 신규 대여"),
+            ("2026-06-05", "지급임차료", "전대 차감"),
+            ("2026-06-06", "보험료", "정상 비용"),
+        ]
+    )
+    ledger.loc[:, ["차변", "대변"]] = [
+        ["100", "0"],
+        ["0", "100"],
+        ["100", "0"],
+        ["100", "0"],
+        ["0", "100"],
+        ["100", "0"],
+    ]
+
+    rows = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )
+
+    assert [row.funding for row in rows[:4]] == [None, None, None, "자금대여"]
+    assert rows[4].income_expense is None
+    assert rows[4].bucket is None
+    assert rows[5].income_expense == "비용"
+    assert rows[5].bucket == "기타비용"
+
+
 def test_detail_fails_closed_when_given_out_of_period_row():
     ledger = _ledger([("2026-07-01", "상품매출", "outside")])
 

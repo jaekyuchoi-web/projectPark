@@ -228,6 +228,34 @@ def test_fund_lending_ignores_allowance_accounts():
     assert result.get("특관자A").fund_lending == 2000
 
 
+def test_aggregate_row_eligibility_excludes_nonqualifying_detail_categories():
+    pd = pytest.importorskip("pandas")
+    ledger = pd.DataFrame(
+        [
+            {"계정명": "단기대여금", "거래처명": "특관자A", "차변": 100, "대변": 0, "적요": "전기 이월"},
+            {"계정명": "단기대여금", "거래처명": "특관자A", "차변": 0, "대변": 100, "적요": "상환"},
+            {"계정명": "대손충당금(단기대여금)", "거래처명": "특관자A", "차변": 100, "대변": 0, "적요": "충당금"},
+            {"계정명": "단기대여금", "거래처명": "특관자A", "차변": 100, "대변": 0, "적요": "신규 대여"},
+            {"계정명": "지급임차료", "거래처명": "특관자A", "차변": 0, "대변": 100, "적요": "전대 차감"},
+            {"계정명": "보험료", "거래처명": "특관자A", "차변": 100, "대변": 0, "적요": "정상 비용"},
+        ]
+    )
+    result = AggregateResult()
+
+    aggregate_ledger(
+        ledger,
+        prev_balance=None,
+        current_balance=None,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        result=result,
+        errors=ErrorLog(),
+    )
+
+    assert result.get("특관자A").fund_lending == 100
+    assert result.get("특관자A").purchase_other == 100
+
+
 def test_interest_income_is_not_offset_when_accrued_balance_source_is_absent():
     pd = pytest.importorskip("pandas")
     ledger = pd.DataFrame(
