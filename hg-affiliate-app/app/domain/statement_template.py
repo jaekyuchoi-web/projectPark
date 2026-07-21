@@ -125,7 +125,7 @@ def _rewrite_detail_formula_ranges(ws, last_row: int) -> None:
         for row in ws.iter_rows(min_row=1, max_row=_DETAIL_FIRST_ROW - 1):
             for cell in row:
                 formula = cell.value
-                if not isinstance(formula, str) or not formula.startswith("="):
+                if cell.data_type != "f" or not isinstance(formula, str):
                     continue
                 tokenizer = Tokenizer(formula)
                 changed = False
@@ -259,7 +259,7 @@ def fill_statement_template(
         # L:R 상세(외부참조)는 캐시값으로 보존(없으면 0)
         for col in range(12, 19):  # L..R
             cell = n2.cell(row=r, column=col)
-            if isinstance(cell.value, str) and cell.value.startswith("="):
+            if cell.data_type == "f":
                 cell.value = cached(n2c, r, col) or 0
 
     # ── 블록2: 채권채무(38.2) ───────────────────────────────────────────
@@ -274,7 +274,7 @@ def fill_statement_template(
             n2.cell(row=r, column=col, value=val)
         # K(지분취득) 등 외부참조 컬럼은 캐시값 보존
         cell_k = n2.cell(row=r, column=11)
-        if isinstance(cell_k.value, str) and cell_k.value.startswith("="):
+        if cell_k.data_type == "f":
             cell_k.value = cached(n2c, r, 11) or 0
 
     # ── 외부참조('[n]')·#REF! 수식 전면 중화(덮어쓰지 않은 잔여분) ─────────
@@ -285,12 +285,12 @@ def fill_statement_template(
                 v = c.value
                 if not isinstance(v, str):
                     continue
-                if v.startswith("="):
+                if c.data_type == "f":
                     # 외부참조/#REF! 수식 → 캐시값(또는 공란)으로 중화
                     if _EXT_RE.search(v) or any(t in v for t in _ERR_TOKENS):
                         c.value = cached(wsc, c.row, c.column)
-                elif v in _ERR_TOKENS:
-                    # 문자열 값으로 박힌 오류 토큰(예: 상세설명 셀) → 공란 처리
+                elif c.data_type == "e" and v in _ERR_TOKENS:
+                    # 실제 Excel 오류 셀 → 공란 처리
                     c.value = None
 
     # ── 외부 링크·명명된 범위 정의 제거 ─────────────────────────────────

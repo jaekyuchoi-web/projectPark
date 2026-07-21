@@ -51,6 +51,11 @@ def _row(date: str, description: str) -> StatementDetailRow:
     )
 
 
+def _set_literal_text(cell, value: str) -> None:
+    cell.value = value
+    cell.data_type = "s"
+
+
 def test_template_replaces_stale_q1_detail_with_q2_ytd_rows(tmp_path):
     template = tmp_path / "template.xlsx"
     _write_template(template)
@@ -97,6 +102,88 @@ def test_template_writer_preserves_equals_prefixed_detail_as_literal_text(tmp_pa
     assert cell.value == "=1+1"
     assert cell.data_type == "s"
     loaded.close()
+
+
+def test_template_writer_preserves_formula_and_error_looking_detail_text(tmp_path):
+    template = tmp_path / "template.xlsx"
+    output = tmp_path / "output.xlsx"
+    _write_template(template)
+    literals = ["=[29] literal", "=#REF! literal", "#REF!"]
+
+    wb, _ = fill_statement_template(
+        template,
+        AggregateResult(),
+        Period(2026, 2),
+        [_row("2026-06-30", literal) for literal in literals],
+    )
+    wb.save(output)
+    wb.close()
+
+    loaded = load_workbook(output, data_only=False)
+    for row, literal in enumerate(literals, start=16):
+        cell = loaded["39.1"].cell(row=row, column=10)
+        assert cell.value == literal
+        assert cell.data_type == "s"
+    loaded.close()
+
+
+def test_summary_rewrite_ignores_string_typed_formula_looking_top_cell(tmp_path):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    wb = load_workbook(template)
+    _set_literal_text(wb["39.1"]["P12"], "=SUM(P16:P510)")
+    wb.save(template)
+    wb.close()
+
+    output, _ = fill_statement_template(
+        template,
+        AggregateResult(),
+        Period(2026, 2),
+        [_row("2026-06-30", "June")],
+    )
+
+    literal = output["39.1"]["P12"]
+    assert literal.value == "=SUM(P16:P510)"
+    assert literal.data_type == "s"
+    assert output["39.1"]["C4"].value == "=SUMIFS($N$16:$N$16,$F$16:$F$16,$B4)"
+
+
+def test_string_typed_formula_looking_top_cell_does_not_satisfy_summary_requirement(
+    tmp_path,
+):
+    template = tmp_path / "template.xlsx"
+    wb = Workbook()
+    wb.active.title = "특관자"
+    detail = wb.create_sheet("39.1")
+    wb.create_sheet("39.2")
+    _set_literal_text(detail["P12"], "=SUM(P16:P510)")
+    wb.save(template)
+    wb.close()
+
+    with pytest.raises(ValueError) as exc_info:
+        fill_statement_template(template, AggregateResult(), Period(2026, 2), [])
+
+    assert str(exc_info.value) == "39.1 요약 수식을 안전하게 갱신하지 못했습니다."
+
+
+def test_template_cleanup_neutralizes_actual_formula_and_error_cells(tmp_path):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    wb = load_workbook(template)
+    pivot = wb["39.2"]
+    pivot["L3"] = "=[29]external.xlsx!A1"
+    pivot["M3"] = "#REF!"
+    assert pivot["L3"].data_type == "f"
+    assert pivot["M3"].data_type == "e"
+    wb.save(template)
+    wb.close()
+
+    output, _ = fill_statement_template(
+        template, AggregateResult(), Period(2026, 2), []
+    )
+
+    assert output["39.2"]["L3"].value == 0
+    assert output["39.2"]["M3"].value is None
 
 
 def test_legacy_writer_preserves_equals_prefixed_detail_as_literal_text(
