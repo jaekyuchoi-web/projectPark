@@ -80,6 +80,56 @@ def test_detail_uses_ai_rescued_period_metadata_without_reparsing():
     assert rows[0].date == "이천이십육년 유월"
 
 
+def test_detail_avoids_iterrows_and_preserves_row_aligned_period_metadata(
+    monkeypatch,
+):
+    ledger = _ledger(
+        [
+            ("2026-01-03", "상품매출", "first"),
+            ("2026-06-30", "단기대여금", "second"),
+            ("이천이십육년 유월", "상품매출", "AI rescued"),
+        ]
+    )
+    ledger.loc[:, ["차변", "대변", "잔액"]] = [
+        ["0", "100", "100"],
+        ["1,200", "200", "1,000"],
+        ["30", "0", "30"],
+    ]
+    metadata = [(2026, 1), (2026, 6), (2026, 6)]
+    attrs = ledger.attrs
+    ledger.attrs["period_year_months"] = metadata
+
+    def fail_if_iterrows_called(self):
+        raise AssertionError("detail construction must not use DataFrame.iterrows()")
+
+    monkeypatch.setattr(pd.DataFrame, "iterrows", fail_if_iterrows_called)
+
+    rows = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )
+
+    assert ledger.attrs is attrs
+    assert ledger.attrs["period_year_months"] is metadata
+    assert [
+        (
+            row.date,
+            row.sales_purchase,
+            row.funding,
+            row.debit,
+            row.credit,
+            row.balance,
+        )
+        for row in rows
+    ] == [
+        (dt.date(2026, 1, 3), "매출", None, 0.0, 100.0, 100.0),
+        (dt.date(2026, 6, 30), None, "자금대여", 1200.0, 200.0, 1000.0),
+        ("이천이십육년 유월", "매출", None, 30.0, 0.0, 30.0),
+    ]
+
+
 def test_detail_excludes_non_related_parties():
     ledger = _ledger([("2026-05-01", "상품매출", "related")])
     general = ledger.copy()

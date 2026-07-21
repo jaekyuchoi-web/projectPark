@@ -81,6 +81,22 @@ def _exact_column(df: pd.DataFrame, *candidates: str) -> str | None:
     return None
 
 
+def _column_positions(
+    df: pd.DataFrame, *columns: str | None
+) -> dict[str, int]:
+    """Resolve selected column names to positions for tuple-based row access."""
+    positions = {str(column): position for position, column in enumerate(df.columns)}
+    selected: dict[str, int] = {}
+    for column in columns:
+        if column is None:
+            continue
+        position = positions.get(column)
+        if position is None:
+            raise StatementDetailError("39.1 상세 거래 필수 열을 식별하지 못했습니다.")
+        selected[column] = position
+    return selected
+
+
 def _excel_date(value: object) -> object:
     if isinstance(value, (dt.datetime, dt.date)):
         return value
@@ -169,6 +185,33 @@ def build_statement_detail(
     account_code_col = _exact_column(ledger, "계정코드")
     description_col = _exact_column(ledger, "적요", "적요란")
     partner_code_col = _exact_column(ledger, "거래처코드")
+    positions = _column_positions(
+        ledger,
+        account_col,
+        partner_col,
+        date_col,
+        debit_col,
+        credit_col,
+        balance_col,
+        account_code_col,
+        description_col,
+        partner_code_col,
+    )
+    account_position = positions[account_col]
+    partner_position = positions[partner_col]
+    date_position = positions[date_col]
+    debit_position = positions[debit_col]
+    credit_position = positions[credit_col]
+    balance_position = positions.get(balance_col) if balance_col else None
+    account_code_position = (
+        positions.get(account_code_col) if account_code_col else None
+    )
+    description_position = (
+        positions.get(description_col) if description_col else None
+    )
+    partner_code_position = (
+        positions.get(partner_code_col) if partner_code_col else None
+    )
     parsed_periods = ledger.attrs.get(PERIOD_YEARMONTH_ATTR)
     if parsed_periods is not None:
         if (
@@ -179,8 +222,8 @@ def build_statement_detail(
             raise StatementDetailError("상세 거래의 기간 메타데이터가 유효하지 않습니다.")
     rows: list[StatementDetailRow] = []
 
-    for position, (_, source) in enumerate(ledger.iterrows()):
-        partner_name = str(source.get(partner_col, "")).strip()
+    for position, source in enumerate(ledger.itertuples(index=False, name=None)):
+        partner_name = str(source[partner_position]).strip()
         canonical_name = mapping.get(partner_name)
         if canonical_name not in canonical:
             continue
@@ -188,29 +231,45 @@ def build_statement_detail(
         year_month = (
             parsed_periods[position]
             if parsed_periods is not None
-            else parse_year_month(source.get(date_col))
+            else parse_year_month(source[date_position])
         )
         if year_month is None or not period.contains(*year_month):
             raise StatementDetailError("선택한 누적 기간 밖의 상세 거래가 발견되었습니다.")
 
-        debit = C.to_number(source.get(debit_col))
-        credit = C.to_number(source.get(credit_col))
+        debit = C.to_number(source[debit_position])
+        credit = C.to_number(source[credit_position])
         classification = _classify(
-            source.get(account_col), debit, credit, source.tolist()
+            source[account_position], debit, credit, source
         )
         rows.append(
             StatementDetailRow(
                 *classification,
-                account_code=source.get(account_code_col, "") if account_code_col else "",
-                account_name=source.get(account_col, ""),
-                date=_excel_date(source.get(date_col, "")),
-                description=source.get(description_col, "") if description_col else "",
-                partner_code=source.get(partner_code_col, "") if partner_code_col else "",
+                account_code=(
+                    source[account_code_position]
+                    if account_code_position is not None
+                    else ""
+                ),
+                account_name=source[account_position],
+                date=_excel_date(source[date_position]),
+                description=(
+                    source[description_position]
+                    if description_position is not None
+                    else ""
+                ),
+                partner_code=(
+                    source[partner_code_position]
+                    if partner_code_position is not None
+                    else ""
+                ),
                 partner_name=partner_name,
                 canonical_name=canonical_name,
                 debit=debit,
                 credit=credit,
-                balance=C.to_number(source.get(balance_col)) if balance_col else 0.0,
+                balance=(
+                    C.to_number(source[balance_position])
+                    if balance_position is not None
+                    else 0.0
+                ),
             )
         )
     return rows
