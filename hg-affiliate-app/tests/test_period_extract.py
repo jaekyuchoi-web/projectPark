@@ -71,9 +71,43 @@ def test_parse_year_month_excel_serial():
 
 
 # ── Period 모델 ─────────────────────────────────────────────────────
-@pytest.mark.parametrize("quarter,end_month", [(1, 3), (2, 6), (3, 9), (4, 12)])
-def test_period_end_month(quarter, end_month):
-    assert Period(2026, quarter).end_month == end_month
+@pytest.mark.parametrize(
+    "quarter,end_month",
+    [(1, 3), (2, 6), (3, 9), (4, 12)],
+)
+def test_period_is_calendar_year_to_date(quarter, end_month):
+    period = Period(2026, quarter)
+    assert period.start_month == 1
+    assert period.end_month == end_month
+    assert all(period.contains(2026, month) for month in range(1, end_month + 1))
+    if end_month < 12:
+        assert period.contains(2026, end_month + 1) is False
+
+
+def test_period_quarter_sets_are_monotonic_ytd_supersets():
+    month_sets = [
+        {month for month in range(1, 13) if Period(2026, quarter).contains(2026, month)}
+        for quarter in (1, 2, 3, 4)
+    ]
+    assert month_sets == [
+        {1, 2, 3},
+        {1, 2, 3, 4, 5, 6},
+        {1, 2, 3, 4, 5, 6, 7, 8, 9},
+        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+    ]
+
+
+@pytest.mark.parametrize(
+    "quarter,label",
+    [
+        (1, "2026년 1분기 누적 (1~3월)"),
+        (2, "2026년 2분기 누적 (1~6월)"),
+        (3, "2026년 3분기 누적 (1~9월)"),
+        (4, "2026년 4분기 누적 (1~12월)"),
+    ],
+)
+def test_period_label_states_the_ytd_month_span(quarter, label):
+    assert Period(2026, quarter).label == label
 
 
 @pytest.mark.parametrize("quarter,month,inside", [
@@ -142,6 +176,7 @@ def test_extract_unparseable_rescued_by_ai():
     assert r.ok is True
     assert r.kept == 3
     assert r.parsed_ai == 1
+    assert r.df.attrs["period_year_months"] == [(2026, 2), (2026, 3), (2026, 3)]
 
 
 def test_extract_ai_still_fails_blocks():

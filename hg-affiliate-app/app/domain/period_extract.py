@@ -26,6 +26,7 @@ from . import columns as C
 
 # 엑셀 1900 날짜체계 기준일(윤년 버그 호환 위해 1899-12-30)
 _EXCEL_EPOCH = dt.datetime(1899, 12, 30)
+PERIOD_YEARMONTH_ATTR = "period_year_months"
 
 # "2026-03-15" / "2026.3.15" / "2026/3" / "2026년 3월" 등에서 년·월 추출
 _YM_SEP_RE = re.compile(r"(20\d{2})\s*[-./년]\s*(\d{1,2})")
@@ -69,18 +70,32 @@ def parse_year_month(value) -> tuple[int, int] | None:
 
 @dataclass(frozen=True)
 class Period:
-    """당기 기간. year=회계연도, quarter=1~4."""
+    """Calendar-year-to-date reporting period.
+
+    NON-NEGOTIABLE: quarters start in January. 2Q is January through June,
+    never April through June only.
+    """
 
     year: int
     quarter: int
 
     @property
+    def start_month(self) -> int:
+        return 1
+
+    @property
     def end_month(self) -> int:
         return self.quarter * 3
 
+    @property
+    def label(self) -> str:
+        return (
+            f"{self.year}년 {self.quarter}분기 누적 "
+            f"({self.start_month}~{self.end_month}월)"
+        )
+
     def contains(self, year: int, month: int) -> bool:
-        """(year, month) 가 당기(해당년도 1월~분기말월)에 속하는지."""
-        return year == self.year and 1 <= month <= self.end_month
+        return year == self.year and self.start_month <= month <= self.end_month
 
 
 def parse_period(year, quarter) -> Period:
@@ -171,6 +186,7 @@ def extract_current_period(
 
     keep = sorted(i for i, ym in parsed.items() if period.contains(*ym))
     filtered = df.iloc[keep].reset_index(drop=True)
+    filtered.attrs[PERIOD_YEARMONTH_ATTR] = [parsed[index] for index in keep]
     return ExtractResult(
         df=filtered, ok=True,
         kept=len(keep),
