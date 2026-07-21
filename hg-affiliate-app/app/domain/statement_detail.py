@@ -85,6 +85,20 @@ def _excel_date(value: object) -> object:
         return value
 
 
+def _is_valid_year_month_pair(value: object) -> bool:
+    if not isinstance(value, (tuple, list)) or len(value) != 2:
+        return False
+    year, month = value
+    return (
+        isinstance(year, int)
+        and not isinstance(year, bool)
+        and 2000 <= year <= 2099
+        and isinstance(month, int)
+        and not isinstance(month, bool)
+        and 1 <= month <= 12
+    )
+
+
 def _classify(
     account: object,
 ) -> tuple[str | None, str | None, str | None, str | None, str | None]:
@@ -141,8 +155,13 @@ def build_statement_detail(
     description_col = _exact_column(ledger, "적요", "적요란")
     partner_code_col = _exact_column(ledger, "거래처코드")
     parsed_periods = ledger.attrs.get(PERIOD_YEARMONTH_ATTR)
-    if parsed_periods is not None and len(parsed_periods) != len(ledger):
-        raise StatementDetailError("상세 거래의 기간 메타데이터가 원장 행과 일치하지 않습니다.")
+    if parsed_periods is not None:
+        if (
+            not isinstance(parsed_periods, (list, tuple))
+            or len(parsed_periods) != len(ledger)
+            or not all(_is_valid_year_month_pair(value) for value in parsed_periods)
+        ):
+            raise StatementDetailError("상세 거래의 기간 메타데이터가 유효하지 않습니다.")
     rows: list[StatementDetailRow] = []
 
     for position, (_, source) in enumerate(ledger.iterrows()):

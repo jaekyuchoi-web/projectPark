@@ -151,3 +151,27 @@ def test_detail_fails_closed_when_required_column_is_missing():
             canonical={"특관자A"},
             period=Period(2026, 2),
         )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        (2026,),
+        "not-a-pair",
+        (2026, 13),
+        ("2026", 6),
+    ],
+)
+def test_detail_fails_closed_when_period_metadata_entry_is_malformed(metadata):
+    ledger = _ledger([("2026-06-30", "상품매출", "do not leak this description")])
+    ledger.attrs["period_year_months"] = [metadata]
+
+    with pytest.raises(StatementDetailError, match="기간 메타데이터") as exc_info:
+        build_statement_detail(
+            ledger,
+            mapping={"특관자A": "특관자A"},
+            canonical={"특관자A"},
+            period=Period(2026, 2),
+        )
+
+    assert "do not leak this description" not in str(exc_info.value)
