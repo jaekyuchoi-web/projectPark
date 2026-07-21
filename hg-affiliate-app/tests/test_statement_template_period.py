@@ -10,7 +10,10 @@ from openpyxl.styles import PatternFill
 from app.domain.aggregate import AggregateResult
 from app.domain.period_extract import Period
 from app.domain.statement_detail import StatementDetailError, StatementDetailRow
-from app.domain.statement_template import fill_statement_template
+from app.domain.statement_template import (
+    StatementTemplateError,
+    fill_statement_template,
+)
 
 
 def _write_template(path: Path) -> None:
@@ -56,9 +59,21 @@ def _set_literal_text(cell, value: str) -> None:
     cell.data_type = "s"
 
 
+def _assert_period_label(ws) -> None:
+    assert ws["A1"].value == "2026년 2분기 누적 (1~6월)"
+    assert "A1:F1" in {str(cell_range) for cell_range in ws.merged_cells.ranges}
+    assert ws["A1"].alignment.horizontal == "center"
+    assert ws["A1"].alignment.vertical == "center"
+    assert ws["A1"].font.bold is True
+
+
 def test_template_replaces_stale_q1_detail_with_q2_ytd_rows(tmp_path):
     template = tmp_path / "template.xlsx"
     _write_template(template)
+    source = load_workbook(template)
+    source["39.1"]["A2"] = "ROW_TWO_SENTINEL"
+    source.save(template)
+    source.close()
 
     wb, unmatched = fill_statement_template(
         template,
@@ -69,7 +84,8 @@ def test_template_replaces_stale_q1_detail_with_q2_ytd_rows(tmp_path):
 
     detail = wb["39.1"]
     assert unmatched == []
-    assert detail["A1"].value == "2026년 2분기 누적 (1~6월)"
+    _assert_period_label(detail)
+    assert detail["A2"].value == "ROW_TWO_SENTINEL"
     assert detail["I16"].value == "2026-01-03"
     assert detail["I17"].value == "2026-06-30"
     assert detail["J16"].value == "2026.1Q 정상 적요"
@@ -206,6 +222,56 @@ def test_legacy_writer_preserves_equals_prefixed_detail_as_literal_text(
     assert cell.value == "=1+1"
     assert cell.data_type == "s"
     loaded.close()
+
+
+def test_legacy_writer_merges_and_centers_period_label_without_changing_detail(
+    tmp_path, monkeypatch
+):
+    from app.domain import statement
+
+    monkeypatch.setattr(statement, "TEMPLATE_PATH", tmp_path / "missing.xlsx")
+    wb, _ = statement.build_statement(
+        AggregateResult(),
+        Period(2026, 2),
+        [_row("2026-06-30", "June")],
+    )
+
+    detail = wb["39.1"]
+    _assert_period_label(detail)
+    assert detail["B15"].value == "매입매출"
+    assert detail["I16"].value == "2026-06-30"
+    assert detail["J16"].value == "June"
+
+
+def test_template_period_label_accepts_the_exact_existing_merge(tmp_path):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    source = load_workbook(template)
+    source["39.1"].merge_cells("A1:F1")
+    source.save(template)
+    source.close()
+
+    wb, _ = fill_statement_template(
+        template, AggregateResult(), Period(2026, 2), []
+    )
+
+    _assert_period_label(wb["39.1"])
+    assert len(wb["39.1"].merged_cells.ranges) == 1
+
+
+def test_template_period_label_rejects_an_incompatible_overlapping_merge(tmp_path):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    source = load_workbook(template)
+    source["39.1"].merge_cells("B1:G1")
+    source.save(template)
+    source.close()
+
+    with pytest.raises(StatementTemplateError) as exc_info:
+        fill_statement_template(template, AggregateResult(), Period(2026, 2), [])
+
+    assert str(exc_info.value) == "39.1 기간 라벨 영역을 안전하게 갱신하지 못했습니다."
+    assert "B1:G1" not in str(exc_info.value)
 
 
 def test_illegal_detail_text_raises_generic_statement_detail_error(tmp_path):

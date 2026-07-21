@@ -21,7 +21,7 @@ from openpyxl.utils import get_column_letter
 from .aggregate import AggregateResult
 from .period_extract import Period
 from .statement_detail import StatementDetailRow, write_detail_cell
-from .statement_template import fill_statement_template
+from .statement_template import fill_statement_template, write_period_label
 
 # 고정 템플릿(정답 양식). 존재하면 이 양식으로 산출, 없으면 단순표 폴백.
 TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "assets" / "statement_template.xlsx"
@@ -93,7 +93,7 @@ def _build_legacy(
     _write_pivot_sheet(pivot_ws, result)
 
     note_ws = wb.create_sheet("39.1")
-    note_ws["A1"] = period.label
+    write_period_label(note_ws, period)
     headers = [
         "매입매출", "자금거래", "채권채무", "수익.비용", "구분계정과목",
         "계정코드", "계정과목", "날짜", "적요", "거래처코드", "거래처명",

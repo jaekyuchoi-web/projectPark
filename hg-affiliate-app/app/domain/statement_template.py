@@ -76,6 +76,42 @@ class StatementTemplateError(ValueError):
     """The statement template cannot be updated safely."""
 
 
+_PERIOD_LABEL_RANGE = "A1:F1"
+_PERIOD_LABEL_ERROR = "39.1 기간 라벨 영역을 안전하게 갱신하지 못했습니다."
+
+
+def write_period_label(ws, period: Period) -> None:
+    """Write the visible 39.1 period label without altering the report layout."""
+    try:
+        for merged_range in ws.merged_cells.ranges:
+            if str(merged_range) == _PERIOD_LABEL_RANGE:
+                continue
+            if not (
+                merged_range.max_col < 1
+                or merged_range.min_col > 6
+                or merged_range.max_row < 1
+                or merged_range.min_row > 1
+            ):
+                raise StatementTemplateError(_PERIOD_LABEL_ERROR)
+
+        if _PERIOD_LABEL_RANGE not in {
+            str(merged_range) for merged_range in ws.merged_cells.ranges
+        }:
+            ws.merge_cells(_PERIOD_LABEL_RANGE)
+
+        label_cell = ws["A1"]
+        label_cell.value = period.label
+        label_alignment = copy(label_cell.alignment)
+        label_alignment.horizontal = "center"
+        label_alignment.vertical = "center"
+        label_cell.alignment = label_alignment
+        label_font = copy(label_cell.font)
+        label_font.bold = True
+        label_cell.font = label_font
+    except Exception as exc:
+        raise StatementTemplateError(_PERIOD_LABEL_ERROR) from exc
+
+
 def _parse_detail_range_token(value: str, sheet_title: str):
     qualifier = ""
     reference = value
@@ -165,6 +201,7 @@ def _write_statement_detail(
     period: Period,
     rows: Sequence[StatementDetailRow],
 ) -> None:
+    write_period_label(ws, period)
     style_source = [
         ws.cell(row=_DETAIL_FIRST_ROW, column=column)
         for column in range(_DETAIL_FIRST_COL, _DETAIL_LAST_COL + 1)
@@ -197,10 +234,6 @@ def _write_statement_detail(
 
     last_row = _DETAIL_FIRST_ROW + max(len(rows), 1) - 1
     _rewrite_detail_formula_ranges(ws, last_row)
-    ws["A1"] = period.label
-    label_font = copy(ws["A1"].font)
-    label_font.bold = True
-    ws["A1"].font = label_font
 
 
 def _has_data(agg: Aggregate) -> bool:
