@@ -6,5 +6,11 @@ _sample_input*/
 outputs/
 firebase-debug.log
 
+# Isolated implementation worktrees
+.worktrees/
+
+# Subagent-driven development scratch state
+.superpowers/
+
 # OS
 .DS_Store

@@ -13,8 +13,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pandas as pd
+
+# Original header bases that were renamed during normalization. Consumers can
+# reject a collision only when it affects a source field they actually use.
+DEDUPLICATED_HEADER_BASES_ATTR = "deduplicated_header_bases"
 
 
 class ExcelReadError(Exception):
@@ -117,9 +122,22 @@ def normalized_frame(df: pd.DataFrame) -> pd.DataFrame:
         return df
     hr = detect_header_row(df)
     header = [str(v).strip() for v in df.iloc[hr].tolist()]
+    bases = [name if name and name != "nan" else "col" for name in header]
+    semantic_groups: dict[str, list[str]] = {}
+    for base in bases:
+        key = re.sub(r"[\s\u3000]", "", base).casefold()
+        semantic_groups.setdefault(key, []).append(base)
+    deduplicated_bases = frozenset(
+        base
+        for group in semantic_groups.values()
+        if len(group) > 1
+        for base in group
+    )
     body = df.iloc[hr + 1 :].copy()
     body.columns = _dedupe(header)
     body = body.reset_index(drop=True)
+    if deduplicated_bases:
+        body.attrs[DEDUPLICATED_HEADER_BASES_ATTR] = deduplicated_bases
     return body
 
 

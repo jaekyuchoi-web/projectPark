@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
+from typing import Any
 
 import pandas as pd
 
@@ -48,6 +50,26 @@ def resolve_column(df: pd.DataFrame, role: str) -> str | None:
         for c in cols:
             if alias in c:
                 return c
+    return None
+
+
+def resolve_ledger_balance_column(df: pd.DataFrame) -> str | None:
+    """Resolve the 39.1 balance column, using generic amount only as fallback."""
+    columns = [str(column) for column in df.columns]
+    compact = {
+        re.sub(r"[\s\u3000]", "", column).casefold(): column
+        for column in columns
+    }
+
+    for alias in ("잔액", "기말잔액", "당기잔액", "balance"):
+        exact = compact.get(alias.casefold())
+        if exact is not None:
+            return exact
+
+    for alias in ("금액", "amount"):
+        exact = compact.get(alias.casefold())
+        if exact is not None:
+            return exact
     return None
 
 
@@ -98,6 +120,29 @@ def to_number(value) -> float:
     return -num if neg else num
 
 
+def array_rows(df: pd.DataFrame):
+    """Return object rows without creating pandas Series or finalizing attrs."""
+    return df.to_numpy(dtype=object, copy=False)
+
+
+def array_column_positions(df: pd.DataFrame) -> dict[str, int]:
+    """Return the array position for each normalized frame column name."""
+    return {str(column): position for position, column in enumerate(df.columns)}
+
+
+def array_row_value(
+    row: Any,
+    positions: dict[str, int],
+    column: str | None,
+    default: object = None,
+) -> object:
+    """Read a named value from an object-array row with Series.get semantics."""
+    if column is None:
+        return default
+    position = positions.get(column)
+    return row[position] if position is not None else default
+
+
 # ── 계정 분류 키워드 (38.1 거래내역) ──────────────────────────────
 SALES_KEYWORDS = ["제품매출", "상품매출", "용역매출", "미디어사업매출", "렌탈료수익"]
 INTEREST_INCOME_KEYWORDS = ["이자수익"]
@@ -139,3 +184,27 @@ def match_bucket(account: str, keywords: list[str], exclude: list[str] | None = 
         if re.sub(r"[\s\u3000]", "", kw) in a:
             return True
     return False
+
+
+def is_purchase_other_eligible(account: object, debit: float, credit: float) -> bool:
+    """Whether a ledger row contributes to 38.1 purchase-other."""
+    name = str(account)
+    if match_bucket(name, ASSET_ACQUIRE_KEYWORDS):
+        return True
+    if not match_bucket(name, OTHER_EXPENSE_KEYWORDS):
+        return False
+    return not (match_bucket(name, ["지급임차료"]) and debit - credit < 0)
+
+
+def is_fund_lending_eligible(
+    account: object,
+    debit: float,
+    row_values: Iterable[object],
+) -> bool:
+    """Whether a ledger row is a current-period 38.4 lending increase."""
+    if not match_bucket(str(account), LENDING_KEYWORDS, exclude=ALLOWANCE_KEYWORDS):
+        return False
+    text = " ".join(str(value) for value in row_values)
+    return debit > 0 and not any(
+        token in text for token in FUND_LENDING_CARRYFORWARD_TEXTS
+    )

@@ -21,6 +21,7 @@ from .domain.errors import ErrorLog
 from .domain.governance import build_governance
 from .domain.period_check import evaluate_prior_period
 from .domain.period_extract import Period, build_ai_date_parser, extract_current_period
+from .domain.statement_detail import StatementDetailError, build_statement_detail
 from .domain.statement import build_statement
 from .normalize import normalize_names
 from .output_check import verify_output
@@ -207,14 +208,17 @@ def _verify_reconstruction(
         ledger_net: dict[str, float] = {}
         partner_col = C.resolve_column(ledger, "partner")
         if partner_col:
-            for _, row in ledger.iterrows():
-                raw = str(row.get(partner_col, "")).strip()
+            positions = C.array_column_positions(ledger)
+            for row in C.array_rows(ledger):
+                raw = str(C.array_row_value(row, positions, partner_col, "")).strip()
                 canon = mapping.get(raw)
                 if not canon or canon not in canonical:
                     continue
-                if C.match_bucket(str(row.get(acc_col, "")), kws):
-                    d = C.to_number(row.get(debit_col)) if debit_col else 0.0
-                    c = C.to_number(row.get(credit_col)) if credit_col else 0.0
+                if C.match_bucket(
+                    str(C.array_row_value(row, positions, acc_col, "")), kws
+                ):
+                    d = C.to_number(C.array_row_value(row, positions, debit_col))
+                    c = C.to_number(C.array_row_value(row, positions, credit_col))
                     delta = (d - c) if kind == "asset" else (c - d)
                     ledger_net[canon] = ledger_net.get(canon, 0.0) + delta
         for canon in canonical:
@@ -247,6 +251,23 @@ def run_pipeline(
     prev_balance = _balance_long_frame(slot_paths.get("prev_balance"))
     ledger = _best_frame(slot_paths.get("current_ledger"))
     current_balance = _balance_long_frame(slot_paths.get("current_balance"))
+
+    if ledger is None:
+        errors.add(
+            "당기 상세 검증 실패",
+            "39.1 상세 거래",
+            "당기 상세 거래를 안전하게 구성하지 못했습니다.",
+            "당기 원장의 필수 열과 선택 기간을 확인하세요.",
+        )
+        error_wb = build_error_report(errors)
+        error_path = output_dir / "오류목록.xlsx"
+        error_wb.save(error_path)
+        return PipelineOutcome(
+            ok=False,
+            message="당기 상세 거래 검증에 실패하여 다운로드를 차단했습니다.",
+            outputs={"오류목록": error_path},
+            error_count=errors.count,
+        )
 
     # 1.5) 당기 데이터 추출 — 선택된 당기 기간(해당년도 1월~분기말월)으로 원장을 자른다.
     #   날짜 컬럼 미식별 / AI 보조 후에도 미파싱 셀이 남으면 엄격 차단(다운로드 차단).
@@ -282,6 +303,51 @@ def run_pipeline(
                    "특관자 상호 정리 파일을 보완하거나 OPENAI_API_KEY를 설정하세요.")
     errors.extend_unmatched(norm.unmatched)
 
+    if period is None:
+        errors.add(
+            "당기 선택 실패",
+            "당기 년도/분기",
+            "명세서 출력에 필요한 누적 기간이 전달되지 않았습니다.",
+            "당기 년도와 분기를 다시 선택하세요.",
+        )
+        error_wb = build_error_report(errors)
+        error_path = output_dir / "오류목록.xlsx"
+        error_wb.save(error_path)
+        return PipelineOutcome(
+            ok=False,
+            message="당기 누적 기간이 없어 다운로드를 차단했습니다.",
+            outputs={"오류목록": error_path},
+            error_count=errors.count,
+        )
+
+    detail_rows = []
+    if ledger is not None:
+        try:
+            # The extracted YTD frame is the sole source for both summary and 39.1.
+            detail_rows = build_statement_detail(
+                ledger,
+                mapping=norm.mapping,
+                canonical=canonical,
+                period=period,
+            )
+        except StatementDetailError:
+            # Detail errors must not include source transaction values in the error report.
+            errors.add(
+                "당기 상세 검증 실패",
+                "39.1 상세 거래",
+                "당기 상세 거래를 안전하게 구성하지 못했습니다.",
+                "당기 원장의 필수 열과 선택 기간을 확인하세요.",
+            )
+            error_wb = build_error_report(errors)
+            error_path = output_dir / "오류목록.xlsx"
+            error_wb.save(error_path)
+            return PipelineOutcome(
+                ok=False,
+                message="당기 상세 거래 검증에 실패하여 다운로드를 차단했습니다.",
+                outputs={"오류목록": error_path},
+                error_count=errors.count,
+            )
+
     # 3~5) 집계
     result = AggregateResult()
     aggregate_balance(current_balance, prev_balance, norm.mapping, canonical, result, errors)
@@ -295,18 +361,37 @@ def run_pipeline(
                "인사·급여(임원 식별/배분) 자료가 없어 숫자 공란 처리", "임원 급여 자료로 별도 보완하세요.")
 
     # 7) 출력 생성
-    statement_wb, stmt_unmatched = build_statement(result)
-    for canon in stmt_unmatched:
+    statement_path = output_dir / (
+        f"당기_특관자_명세서_{period.year}_{period.quarter}Q.xlsx"
+    )
+    try:
+        statement_wb, stmt_unmatched = build_statement(result, period, detail_rows)
+        for canon in stmt_unmatched:
+            errors.add(
+                "템플릿 미반영", canon,
+                "데이터가 있으나 명세서 양식의 특수관계자 행에 없어 자동 반영되지 못함",
+                "특관자 양식에 해당 법인 행을 수기로 추가하거나, 상호정리 표기를 양식과 일치시키세요.",
+            )
+        statement_wb.save(statement_path)
+    except Exception:  # noqa: BLE001 - privacy boundary for template/build/save failures
         errors.add(
-            "템플릿 미반영", canon,
-            "데이터가 있으나 명세서 양식의 특수관계자 행에 없어 자동 반영되지 못함",
-            "특관자 양식에 해당 법인 행을 수기로 추가하거나, 상호정리 표기를 양식과 일치시키세요.",
+            "명세서 생성 실패",
+            "당기 특관자 명세서",
+            "명세서 파일을 안전하게 생성하지 못했습니다.",
+            "명세서 템플릿과 출력 경로를 확인한 뒤 다시 실행하세요.",
         )
-    governance_wb = build_governance(norm.mapping, canonical)
+        error_wb = build_error_report(errors)
+        error_path = output_dir / "오류목록.xlsx"
+        error_wb.save(error_path)
+        return PipelineOutcome(
+            ok=False,
+            message="당기 특관자 명세서 생성에 실패하여 다운로드를 차단했습니다.",
+            outputs={"오류목록": error_path},
+            error_count=errors.count,
+        )
 
-    statement_path = output_dir / "당기_특관자_명세서.xlsx"
+    governance_wb = build_governance(norm.mapping, canonical)
     governance_path = output_dir / "지배구조.xlsx"
-    statement_wb.save(statement_path)
     governance_wb.save(governance_path)
 
     # 8) 출력 안전성 검증 (명세서·지배구조)
