@@ -21,6 +21,7 @@ from .domain.errors import ErrorLog
 from .domain.governance import build_governance
 from .domain.period_check import evaluate_prior_period
 from .domain.period_extract import Period, build_ai_date_parser, extract_current_period
+from .domain.statement_detail import StatementDetailError, build_statement_detail
 from .domain.statement import build_statement
 from .normalize import normalize_names
 from .output_check import verify_output
@@ -282,6 +283,51 @@ def run_pipeline(
                    "특관자 상호 정리 파일을 보완하거나 OPENAI_API_KEY를 설정하세요.")
     errors.extend_unmatched(norm.unmatched)
 
+    if period is None:
+        errors.add(
+            "당기 선택 실패",
+            "당기 년도/분기",
+            "명세서 출력에 필요한 누적 기간이 전달되지 않았습니다.",
+            "당기 년도와 분기를 다시 선택하세요.",
+        )
+        error_wb = build_error_report(errors)
+        error_path = output_dir / "오류목록.xlsx"
+        error_wb.save(error_path)
+        return PipelineOutcome(
+            ok=False,
+            message="당기 누적 기간이 없어 다운로드를 차단했습니다.",
+            outputs={"오류목록": error_path},
+            error_count=errors.count,
+        )
+
+    detail_rows = []
+    if ledger is not None:
+        try:
+            # The extracted YTD frame is the sole source for both summary and 39.1.
+            detail_rows = build_statement_detail(
+                ledger,
+                mapping=norm.mapping,
+                canonical=canonical,
+                period=period,
+            )
+        except StatementDetailError:
+            # Detail errors must not include source transaction values in the error report.
+            errors.add(
+                "당기 상세 검증 실패",
+                "39.1 상세 거래",
+                "당기 상세 거래를 안전하게 구성하지 못했습니다.",
+                "당기 원장의 필수 열과 선택 기간을 확인하세요.",
+            )
+            error_wb = build_error_report(errors)
+            error_path = output_dir / "오류목록.xlsx"
+            error_wb.save(error_path)
+            return PipelineOutcome(
+                ok=False,
+                message="당기 상세 거래 검증에 실패하여 다운로드를 차단했습니다.",
+                outputs={"오류목록": error_path},
+                error_count=errors.count,
+            )
+
     # 3~5) 집계
     result = AggregateResult()
     aggregate_balance(current_balance, prev_balance, norm.mapping, canonical, result, errors)
@@ -295,7 +341,7 @@ def run_pipeline(
                "인사·급여(임원 식별/배분) 자료가 없어 숫자 공란 처리", "임원 급여 자료로 별도 보완하세요.")
 
     # 7) 출력 생성
-    statement_wb, stmt_unmatched = build_statement(result)
+    statement_wb, stmt_unmatched = build_statement(result, period, detail_rows)
     for canon in stmt_unmatched:
         errors.add(
             "템플릿 미반영", canon,
@@ -304,7 +350,9 @@ def run_pipeline(
         )
     governance_wb = build_governance(norm.mapping, canonical)
 
-    statement_path = output_dir / "당기_특관자_명세서.xlsx"
+    statement_path = output_dir / (
+        f"당기_특관자_명세서_{period.year}_{period.quarter}Q.xlsx"
+    )
     governance_path = output_dir / "지배구조.xlsx"
     statement_wb.save(statement_path)
     governance_wb.save(governance_path)
