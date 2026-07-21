@@ -197,6 +197,43 @@ def test_fund_lending_ignores_prior_half_carryforward_block():
     assert result.get("특관자A").fund_lending == 2000
 
 
+def test_aggregate_ledger_avoids_iterrows_for_period_metadata(monkeypatch):
+    pd = pytest.importorskip("pandas")
+    ledger = pd.DataFrame(
+        [
+            {
+                "계정명": "상품매출",
+                "거래처명": "특관자A",
+                "차변": "0",
+                "대변": "100",
+            }
+        ]
+    )
+    metadata = [(2026, 6)]
+    attrs = ledger.attrs
+    ledger.attrs["period_year_months"] = metadata
+
+    def fail_if_iterrows_called(self):
+        raise AssertionError("ledger aggregation must not use DataFrame.iterrows()")
+
+    monkeypatch.setattr(pd.DataFrame, "iterrows", fail_if_iterrows_called)
+
+    result = AggregateResult()
+    aggregate_ledger(
+        ledger,
+        prev_balance=None,
+        current_balance=None,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        result=result,
+        errors=ErrorLog(),
+    )
+
+    assert ledger.attrs is attrs
+    assert ledger.attrs["period_year_months"] is metadata
+    assert result.get("특관자A").sales == 100.0
+
+
 def test_fund_lending_ignores_allowance_accounts():
     ledger = pytest.importorskip("pandas").DataFrame(
         [

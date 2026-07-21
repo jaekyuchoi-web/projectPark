@@ -119,6 +119,24 @@ def to_number(value) -> float:
     return -num if neg else num
 
 
+def tuple_column_positions(df: pd.DataFrame) -> dict[str, int]:
+    """Return the tuple position for each normalized frame column name."""
+    return {str(column): position for position, column in enumerate(df.columns)}
+
+
+def tuple_row_value(
+    row: tuple[object, ...],
+    positions: dict[str, int],
+    column: str | None,
+    default: object = None,
+) -> object:
+    """Read a named value from an ``itertuples`` row with Series.get semantics."""
+    if column is None:
+        return default
+    position = positions.get(column)
+    return row[position] if position is not None else default
+
+
 # ── 계정 분류 키워드 (38.1 거래내역) ──────────────────────────────
 SALES_KEYWORDS = ["제품매출", "상품매출", "용역매출", "미디어사업매출", "렌탈료수익"]
 INTEREST_INCOME_KEYWORDS = ["이자수익"]

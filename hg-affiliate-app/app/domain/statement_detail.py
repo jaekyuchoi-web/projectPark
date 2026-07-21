@@ -85,15 +85,17 @@ def _column_positions(
     df: pd.DataFrame, *columns: str | None
 ) -> dict[str, int]:
     """Resolve selected column names to positions for tuple-based row access."""
-    positions = {str(column): position for position, column in enumerate(df.columns)}
+    positions: dict[str, list[int]] = {}
+    for position, column in enumerate(df.columns):
+        positions.setdefault(str(column), []).append(position)
     selected: dict[str, int] = {}
     for column in columns:
         if column is None:
             continue
-        position = positions.get(column)
-        if position is None:
+        matches = positions.get(column, [])
+        if len(matches) != 1:
             raise StatementDetailError("39.1 상세 거래 필수 열을 식별하지 못했습니다.")
-        selected[column] = position
+        selected[column] = matches[0]
     return selected
 
 

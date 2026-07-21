@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 from openpyxl import Workbook, load_workbook
 
 from app.config import Settings
+from app.domain.errors import ErrorLog
 from app.domain.period_extract import Period, parse_year_month
 from app.domain.statement_detail import StatementDetailError
 from app.output_check import CheckResult
@@ -101,6 +103,7 @@ def test_run_pipeline_q2_uses_january_through_june_for_summary_and_detail(
     seen: dict[str, object] = {}
     original_detail = pipeline.build_statement_detail
     original_aggregate = pipeline.aggregate_ledger
+    original_reconstruction = pipeline._verify_reconstruction
 
     def capture_detail(ledger, **kwargs):
         seen["detail"] = ledger
@@ -110,8 +113,13 @@ def test_run_pipeline_q2_uses_january_through_june_for_summary_and_detail(
         seen["aggregate"] = ledger
         return original_aggregate(ledger, *args, **kwargs)
 
+    def capture_reconstruction(*args, **kwargs):
+        seen["reconstruction"] = args[1]
+        return original_reconstruction(*args, **kwargs)
+
     monkeypatch.setattr(pipeline, "build_statement_detail", capture_detail)
     monkeypatch.setattr(pipeline, "aggregate_ledger", capture_aggregate)
+    monkeypatch.setattr(pipeline, "_verify_reconstruction", capture_reconstruction)
     ledger = tmp_path / "ledger.xlsx"
     _make_ledger(
         ledger,
@@ -130,7 +138,8 @@ def test_run_pipeline_q2_uses_january_through_june_for_summary_and_detail(
     )
 
     assert outcome.ok is True
-    assert seen["aggregate"] is seen["detail"]
+    assert seen["aggregate"] is seen["detail"] is seen["reconstruction"]
+    assert seen["detail"].attrs["period_year_months"] == [(2026, 1), (2026, 6)]
     statement_path = outcome.outputs["당기_특관자_명세서"]
     assert statement_path.name == "당기_특관자_명세서_2026_2Q.xlsx"
     workbook = load_workbook(statement_path, data_only=False)
@@ -150,6 +159,82 @@ def test_run_pipeline_q2_uses_january_through_june_for_summary_and_detail(
         for row in range(16, detail.max_row + 1)
     }
     workbook.close()
+
+
+def test_run_pipeline_avoids_iterrows_for_period_filtered_ledger(tmp_path, monkeypatch):
+    from app import pipeline
+    from app.domain import statement
+
+    template = tmp_path / "template.xlsx"
+    _make_period_template(template)
+    monkeypatch.setattr(statement, "TEMPLATE_PATH", template)
+    monkeypatch.setattr(
+        pipeline,
+        "verify_output",
+        lambda _: CheckResult(ok=True, reason="test", recalculated=False),
+    )
+
+    def fail_if_iterrows_called(self):
+        raise AssertionError("period-filtered ledger must not use DataFrame.iterrows()")
+
+    monkeypatch.setattr(pd.DataFrame, "iterrows", fail_if_iterrows_called)
+    ledger = tmp_path / "ledger.xlsx"
+    _make_ledger(
+        ledger,
+        [["상품매출", "2026-06-30", "특관자A", "0", "100"]],
+    )
+
+    outcome = run_pipeline(
+        _slots(ledger),
+        _SETTINGS,
+        tmp_path,
+        period=Period(2026, 2),
+    )
+
+    assert outcome.ok is True
+
+
+def test_reconstruction_avoids_iterrows_for_period_metadata(monkeypatch):
+    from app import pipeline
+
+    ledger = pd.DataFrame(
+        [
+            {
+                "계정명": "외상매출금",
+                "거래처명": "특관자A",
+                "차변": "100",
+                "대변": "0",
+            }
+        ]
+    )
+    prev_balance = pd.DataFrame(
+        [{"계정과목": "외상매출금", "거래처명": "특관자A", "금액": "0"}]
+    )
+    current_balance = pd.DataFrame(
+        [{"계정과목": "외상매출금", "거래처명": "특관자A", "금액": "100"}]
+    )
+    metadata = [(2026, 6)]
+    attrs = ledger.attrs
+    ledger.attrs["period_year_months"] = metadata
+
+    def fail_if_iterrows_called(self):
+        raise AssertionError("ledger reconstruction must not use DataFrame.iterrows()")
+
+    monkeypatch.setattr(pd.DataFrame, "iterrows", fail_if_iterrows_called)
+    errors = ErrorLog()
+
+    pipeline._verify_reconstruction(
+        prev_balance,
+        ledger,
+        current_balance,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        errors=errors,
+    )
+
+    assert ledger.attrs is attrs
+    assert ledger.attrs["period_year_months"] is metadata
+    assert errors.count == 0
 
 
 def test_run_pipeline_q2_preserves_string_typed_error_looking_description_with_static_validation(

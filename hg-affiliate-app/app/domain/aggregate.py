@@ -52,17 +52,18 @@ class AggregateResult:
 
 
 def _iter_rows(df: pd.DataFrame, mapping: dict[str, str], canonical: set[str]):
-    """거래처를 정규명으로 매핑해, 특관자에 해당하는 행만 (canonical, row) 로 yield."""
+    """Yield related-party canonical names with tuple rows and column positions."""
     partner_col = C.resolve_column(df, "partner")
     if partner_col is None:
         return
-    for _, row in df.iterrows():
-        raw = str(row.get(partner_col, "")).strip()
+    positions = C.tuple_column_positions(df)
+    for row in df.itertuples(index=False, name=None):
+        raw = str(C.tuple_row_value(row, positions, partner_col, "")).strip()
         if not raw or raw == "nan":
             continue
         canon = mapping.get(raw)
         if canon and canon in canonical:
-            yield canon, row
+            yield canon, row, positions
 
 
 def aggregate_ledger(
@@ -89,10 +90,10 @@ def aggregate_ledger(
 
     accrued_net: dict[str, float] = {}  # 원장상 미수수익 순증 (대변-차변 아님: 자산이므로 차변-대변)
 
-    for canon, row in _iter_rows(ledger, mapping, canonical):
-        acc = str(row.get(acc_col, ""))
-        debit = C.to_number(row.get(debit_col)) if debit_col else 0.0
-        credit = C.to_number(row.get(credit_col)) if credit_col else 0.0
+    for canon, row, positions in _iter_rows(ledger, mapping, canonical):
+        acc = str(C.tuple_row_value(row, positions, acc_col, ""))
+        debit = C.to_number(C.tuple_row_value(row, positions, debit_col))
+        credit = C.to_number(C.tuple_row_value(row, positions, credit_col))
         agg = result.get(canon)
 
         # 매출 (대변-차변)
@@ -113,7 +114,7 @@ def aggregate_ledger(
             accrued_net[canon] = accrued_net.get(canon, 0.0) + (debit - credit)
 
         # 38.4 자금대여 = 단기·장기대여금 차변 증가(이전 기간 블록/충당금 제외)
-        if C.is_fund_lending_eligible(acc, debit, row.tolist()):
+        if C.is_fund_lending_eligible(acc, debit, row):
             agg.fund_lending += debit
 
     # 매출등 기타: 이자수익 + 미수수익 잔액증감 역산(당기말-전기이월-원장순증)
@@ -148,10 +149,12 @@ def _balance_by_canon(
     amt_col = C.resolve_column(balance, "amount")
     if acc_col is None or amt_col is None:
         return out
-    for canon, row in _iter_rows(balance, mapping, canonical):
-        acc = str(row.get(acc_col, ""))
+    for canon, row, positions in _iter_rows(balance, mapping, canonical):
+        acc = str(C.tuple_row_value(row, positions, acc_col, ""))
         if C.match_bucket(acc, keywords, exclude):
-            out[canon] = out.get(canon, 0.0) + C.to_number(row.get(amt_col))
+            out[canon] = out.get(canon, 0.0) + C.to_number(
+                C.tuple_row_value(row, positions, amt_col)
+            )
     return out
 
 

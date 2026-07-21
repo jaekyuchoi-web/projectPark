@@ -130,6 +130,29 @@ def test_detail_avoids_iterrows_and_preserves_row_aligned_period_metadata(
     ]
 
 
+@pytest.mark.parametrize(
+    "column,position",
+    [
+        ("차변", 7),
+        ("거래처명", 6),
+        ("적요", 4),
+    ],
+)
+def test_detail_fails_closed_for_duplicate_selected_column(column, position):
+    ledger = _ledger([("2026-06-30", "상품매출", "duplicate")])
+    ledger.insert(position, column, "duplicate", allow_duplicates=True)
+
+    with pytest.raises(StatementDetailError, match="필수 열") as exc_info:
+        build_statement_detail(
+            ledger,
+            mapping={"특관자A": "특관자A"},
+            canonical={"특관자A"},
+            period=Period(2026, 2),
+        )
+
+    assert column not in str(exc_info.value)
+
+
 def test_detail_excludes_non_related_parties():
     ledger = _ledger([("2026-05-01", "상품매출", "related")])
     general = ledger.copy()
