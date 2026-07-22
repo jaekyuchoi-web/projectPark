@@ -6,9 +6,9 @@ cd "$(dirname "$0")"
 
 PORT="${PORT:-8000}"
 
-if [ -d ".venv" ]; then
-  # shellcheck disable=SC1091
-  source .venv/bin/activate
+PY="python3"
+if [ -x ".venv/bin/python" ]; then
+  PY=".venv/bin/python"
 fi
 
-exec uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
+exec "$PY" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT"
