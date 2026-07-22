@@ -225,16 +225,52 @@ async function run() {
       body: JSON.stringify({ sid, year: Number(year), quarter: Number(quarter) }),
     });
     const data = await res.json();
-    renderResult(data);
+    await renderResult(data);
   } catch (e) {
-    renderResult({ ok: false, message: "처리 중 오류가 발생했습니다." });
+    await renderResult({ ok: false, message: "처리 중 오류가 발생했습니다." });
   } finally {
     btn.disabled = false;
     prog.classList.add("hidden");
   }
 }
 
-function renderResult(data) {
+let objectUrls = [];
+
+function parseDownloadFilename(res, fallback) {
+  const cd = res.headers.get("Content-Disposition") || "";
+  const star = cd.match(/filename\*=utf-8''([^;]+)/i);
+  if (star) {
+    try { return decodeURIComponent(star[1]); } catch (e) { /* fallthrough */ }
+  }
+  const plain = cd.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1] : fallback;
+}
+
+// 실행 직후 결과 파일을 blob 으로 미리 받아 둔다.
+// Cloud Run 인스턴스가 내려가 세션이 사라져도 이미 받은 blob 은 저장 가능하다.
+async function prefetchDownloads(downloads) {
+  objectUrls.forEach(u => URL.revokeObjectURL(u));
+  objectUrls = [];
+  return Promise.all((downloads || []).map(async d => {
+    try {
+      const res = await fetch(apiUrl(d.url));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const href = URL.createObjectURL(blob);
+      objectUrls.push(href);
+      return {
+        name: d.name,
+        href,
+        filename: parseDownloadFilename(res, `${d.name}.xlsx`),
+        prefetched: true,
+      };
+    } catch (e) {
+      return { name: d.name, href: apiUrl(d.url), filename: `${d.name}.xlsx`, prefetched: false };
+    }
+  }));
+}
+
+async function renderResult(data) {
   const result = document.getElementById("result");
   const box = document.getElementById("result-box");
   result.classList.remove("hidden");
@@ -244,14 +280,18 @@ function renderResult(data) {
     return;
   }
   box.className = "rounded-lg border border-emerald-200 bg-emerald-50 p-4";
-  const downloads = (data.downloads || []).map(d =>
-    `<a href="${apiUrl(d.url)}" class="inline-flex items-center gap-2 rounded-md bg-white border px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 mr-2 mb-2">
-       ⬇ ${escapeHtml(d.name)}
+  const links = await prefetchDownloads(data.downloads);
+  const buttons = links.map(l =>
+    `<a href="${l.href}" download="${escapeHtml(l.filename)}" class="inline-flex items-center gap-2 rounded-md bg-white border px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 mr-2 mb-2">
+       ⬇ ${escapeHtml(l.name)}
      </a>`).join("");
+  const stale = links.some(l => !l.prefetched)
+    ? `<p class="text-xs text-amber-600 mt-2">일부 파일을 미리 받아두지 못했습니다. 버튼이 동작하지 않으면 다시 실행하세요.</p>`
+    : "";
   box.innerHTML = `
     <p class="text-sm font-medium ${data.ok ? "text-emerald-700" : "text-amber-700"}">${escapeHtml(data.message)}</p>
     <p class="text-xs text-slate-500 mt-1">검토/오류 건수: <b>${data.error_count ?? 0}</b> (상세는 오류목록 파일 참고)</p>
-    <div class="mt-3">${downloads}</div>`;
+    <div class="mt-3">${buttons}</div>${stale}`;
 }
 
 // ── 이벤트 바인딩 ────────────────────────────────────
