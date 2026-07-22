@@ -32,7 +32,12 @@ from openpyxl.formula import Tokenizer
 from ..normalize import _norm_key
 from .aggregate import Aggregate, AggregateResult
 from .period_extract import Period
-from .statement_detail import StatementDetailRow, write_detail_cell
+from .statement_detail import (
+    StatementDetailRow,
+    detail_balance_formula,
+    detail_group_key,
+    write_detail_cell,
+)
 
 # 39.2 블록 좌표(헤더 검증 포함)
 _B1_FIRST, _B1_LAST = 3, 44       # 블록1: 거래(38.1)
@@ -45,6 +50,15 @@ _BLOCK1_COLS: list[tuple[int, str]] = [
     (6, "sales_other"),    # F 기타수익
     (7, "purchase"),       # G 매입
     (8, "purchase_other"), # H 기타비용
+]
+_BLOCK1_DETAIL_COLS: list[tuple[int, str]] = [
+    (12, "매출"),
+    (13, "기타수익"),
+    (14, "이자수익"),
+    (15, "매입"),
+    (16, "기타비용"),
+    (17, "자산매각"),
+    (18, "자산취득"),
 ]
 # (39.2 컬럼 인덱스, Aggregate 속성) — 블록2 채권채무
 # 주의: 투자전환사채(H,8)·발행전환사채(J,10)는 의도적으로 제외한다.
@@ -219,19 +233,29 @@ def _write_statement_detail(
             cell.comment = None
             cell.hyperlink = None
 
+    group_first_row = _DETAIL_FIRST_ROW
+    previous_group_key: tuple[str, str, str] | None = None
     for offset, detail in enumerate(rows):
         target_row = _DETAIL_FIRST_ROW + offset
+        current_group_key = detail_group_key(detail)
+        if current_group_key != previous_group_key:
+            group_first_row = target_row
+        previous_group_key = current_group_key
         if source_height is not None:
             ws.row_dimensions[target_row].height = source_height
         for index, value in enumerate(detail.as_excel_row()):
             column = _DETAIL_FIRST_COL + index
             target = ws.cell(row=target_row, column=column)
-            write_detail_cell(target, value)
+            if column == _DETAIL_LAST_COL and detail.balance is not None:
+                target.value = detail_balance_formula(
+                    detail, group_first_row, target_row
+                )
+            else:
+                write_detail_cell(target, value)
             source = style_source[index]
             target._style = copy(source._style)
             target.number_format = source.number_format
             target.alignment = copy(source.alignment)
-
     last_row = _DETAIL_FIRST_ROW + max(len(rows), 1) - 1
     _rewrite_detail_formula_ranges(ws, last_row)
 
@@ -271,6 +295,15 @@ def fill_statement_template(
         if k:
             by_key[k] = agg
     matched_keys: set[str] = set()
+    detail_by_key: dict[str, dict[str, float]] = {}
+    for detail in detail_rows:
+        if detail.balance is None or not detail.bucket:
+            continue
+        key = _norm_key(detail.canonical_name)
+        if not key:
+            continue
+        totals = detail_by_key.setdefault(key, {})
+        totals[detail.bucket] = totals.get(detail.bucket, 0.0) + detail.balance
 
     n2 = wb["39.2"]
     n2c = wb_cache["39.2"]
@@ -289,11 +322,14 @@ def fill_statement_template(
         for col, attr in _BLOCK1_COLS:
             val = float(round(getattr(agg, attr), 0)) if agg is not None else 0.0
             n2.cell(row=r, column=col, value=val)
-        # L:R 상세(외부참조)는 캐시값으로 보존(없으면 0)
-        for col in range(12, 19):  # L..R
-            cell = n2.cell(row=r, column=col)
-            if cell.data_type == "f":
-                cell.value = cached(n2c, r, col) or 0
+        # L:R 상세는 39.1의 회사·구분계정과목별 최종 잔액만 합산한다.
+        detail_totals = detail_by_key.get(key, {})
+        for col, bucket in _BLOCK1_DETAIL_COLS:
+            n2.cell(
+                row=r,
+                column=col,
+                value=float(round(detail_totals.get(bucket, 0.0), 0)),
+            )
 
     # ── 블록2: 채권채무(38.2) ───────────────────────────────────────────
     for r in range(_B2_FIRST, _B2_LAST + 1):

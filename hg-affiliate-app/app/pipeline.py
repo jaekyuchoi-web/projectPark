@@ -87,10 +87,24 @@ def _balance_long_frame(path: Path | None) -> pd.DataFrame | None:
             continue
 
         acol = C.resolve_column(df, "account")
+        partner_code_col = next(
+            (
+                str(column)
+                for column in df.columns
+                if str(column).replace(" ", "") in {"거래처코드", "코드"}
+            ),
+            None,
+        )
+        partner_codes = (
+            df[partner_code_col]
+            if partner_code_col is not None
+            else pd.Series([""] * len(df), index=df.index)
+        )
         if acol is not None and acol != amtcol:
             # 이미 계정/금액 컬럼이 있는 평면형 시트
             sub = pd.DataFrame({
                 "거래처": df[pcol].astype(str),
+                "거래처코드": partner_codes,
                 "계정과목": df[acol].astype(str),
                 "금액": df[amtcol],
             })
@@ -99,6 +113,7 @@ def _balance_long_frame(path: Path | None) -> pd.DataFrame | None:
             # 시트명을 계정과목으로 사용
             rows.append(pd.DataFrame({
                 "거래처": df[pcol].astype(str),
+                "거래처코드": partner_codes,
                 "계정과목": str(sname).strip(),
                 "금액": df[amtcol],
             }))
@@ -108,6 +123,7 @@ def _balance_long_frame(path: Path | None) -> pd.DataFrame | None:
         if allow_col is not None and allow_col != amtcol:
             rows.append(pd.DataFrame({
                 "거래처": df[pcol].astype(str),
+                "거래처코드": partner_codes,
                 "계정과목": "대손충당금",
                 "금액": df[allow_col],
             }))
@@ -329,6 +345,7 @@ def run_pipeline(
                 mapping=norm.mapping,
                 canonical=canonical,
                 period=period,
+                prev_balance=prev_balance,
             )
         except StatementDetailError:
             # Detail errors must not include source transaction values in the error report.

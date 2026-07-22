@@ -20,7 +20,12 @@ from openpyxl.utils import get_column_letter
 
 from .aggregate import AggregateResult
 from .period_extract import Period
-from .statement_detail import StatementDetailRow, write_detail_cell
+from .statement_detail import (
+    StatementDetailRow,
+    detail_balance_formula,
+    detail_group_key,
+    write_detail_cell,
+)
 from .statement_template import fill_statement_template, write_period_label
 
 # 고정 템플릿(정답 양식). 존재하면 이 양식으로 산출, 없으면 단순표 폴백.
@@ -101,10 +106,21 @@ def _build_legacy(
     ]
     for column, header in enumerate(headers, start=2):
         _style_header(note_ws.cell(row=15, column=column, value=header))
+    group_first_row = 16
+    previous_group_key: tuple[str, str, str] | None = None
     for row_number, detail in enumerate(detail_rows, start=16):
+        current_group_key = detail_group_key(detail)
+        if current_group_key != previous_group_key:
+            group_first_row = row_number
+        previous_group_key = current_group_key
         for column, value in enumerate(detail.as_excel_row(), start=2):
-            write_detail_cell(note_ws.cell(row=row_number, column=column), value)
-
+            cell = note_ws.cell(row=row_number, column=column)
+            if column == 16 and detail.balance is not None:
+                cell.value = detail_balance_formula(
+                    detail, group_first_row, row_number
+                )
+            else:
+                write_detail_cell(cell, value)
     # _집계 시트는 데이터 소스이므로 숨김
     data_ws.sheet_state = "hidden"
     wb.active = wb.sheetnames.index("특관자")
