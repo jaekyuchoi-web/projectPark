@@ -107,7 +107,7 @@ def _build_legacy(
     for column, header in enumerate(headers, start=2):
         _style_header(note_ws.cell(row=15, column=column, value=header))
     group_first_row = 16
-    previous_group_key: tuple[str, str, str] | None = None
+    previous_group_key: tuple[str, str] | None = None
     for row_number, detail in enumerate(detail_rows, start=16):
         current_group_key = detail_group_key(detail)
         if current_group_key != previous_group_key:
