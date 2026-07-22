@@ -133,9 +133,9 @@ def test_detail_avoids_iterrows_and_preserves_row_aligned_period_metadata(
         )
         for row in rows
     ] == [
-        (dt.date(2026, 1, 3), "매출", None, 0.0, 100.0, 100.0),
+        (dt.date(2026, 1, 3), "매출", None, 0.0, 100.0, None),
+        ("이천이십육년 유월", "매출", None, 30.0, 0.0, 70.0),
         (dt.date(2026, 6, 30), None, "자금대여", 1200.0, 200.0, 1000.0),
-        ("이천이십육년 유월", "매출", None, 30.0, 0.0, 30.0),
     ]
 
 
@@ -197,7 +197,6 @@ def test_detail_rejects_deduplicated_selected_source_headers_after_extraction(
     ("first_header", "second_header", "first_value", "second_value"),
     [
         ("적요", "적 요", "PRIVATE_DESCRIPTION_ONE", "PRIVATE_DESCRIPTION_TWO"),
-        ("잔액", "잔 액", "PRIVATE_BALANCE_ONE", "PRIVATE_BALANCE_TWO"),
     ],
 )
 def test_detail_rejects_whitespace_equivalent_selected_headers_after_extraction(
@@ -248,6 +247,23 @@ def test_detail_rejects_whitespace_equivalent_selected_headers_after_extraction(
     assert second_header not in error
     assert first_value not in error
     assert second_value not in error
+
+
+def test_detail_allows_duplicate_source_running_balance_headers_because_they_are_ignored():
+    headers = ["계정명", "날짜", "거래처명", "차변", "대변", "잔액", "잔 액"]
+    values = ["상품매출", "2026-06-30", "특관자A", "0", "100", "999", "888"]
+    normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
+    extracted = extract_current_period(normalized, Period(2026, 2))
+
+    rows = build_statement_detail(
+        extracted.df,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )
+
+    assert len(rows) == 1
+    assert rows[0].balance == 100.0
 
 
 def test_detail_allows_unique_and_irrelevant_deduplicated_source_headers():
@@ -345,69 +361,220 @@ def test_detail_maps_lending_row_to_existing_b_through_p_contract():
     ]
 
 
-def test_detail_prefers_balance_specific_column_over_generic_amount():
-    ledger = _ledger([("2026-06-30", "상품매출", "balance preference")])
-    ledger["금액"] = "999"
-    ledger["잔액"] = "321"
-
-    row = build_statement_detail(
-        ledger,
-        mapping={"특관자A": "특관자A"},
-        canonical={"특관자A"},
-        period=Period(2026, 2),
-    )[0]
-
-    assert row.balance == 321.0
-
-
-def test_detail_prefers_exact_current_balance_over_leading_opening_balance():
-    ledger = _ledger([("2026-06-30", "상품매출", "current balance")]).drop(
-        columns=["잔액"]
+def test_detail_ignores_source_running_balance_and_calculates_group_balance():
+    ledger = _ledger(
+        [
+            ("2026-01-03", "상품매출", "first sale"),
+            ("2026-06-30", "상품매출", "second sale"),
+        ]
     )
-    ledger["기초잔액"] = "111"
-    ledger["잔액"] = "321"
+    ledger.loc[:, ["차변", "대변", "잔액"]] = [
+        ["0", "100", "9,999"],
+        ["20", "0", "8,888"],
+    ]
 
-    row = build_statement_detail(
+    rows = build_statement_detail(
         ledger,
         mapping={"특관자A": "특관자A"},
         canonical={"특관자A"},
         period=Period(2026, 2),
-    )[0]
-
-    assert row.balance == 321.0
-
-
-def test_detail_uses_generic_amount_only_when_balance_column_is_absent():
-    ledger = _ledger([("2026-06-30", "상품매출", "amount fallback")]).drop(
-        columns=["잔액"]
     )
-    ledger["기초잔액"] = "111"
-    ledger["금액"] = "654"
 
-    row = build_statement_detail(
-        ledger,
-        mapping={"특관자A": "특관자A"},
-        canonical={"특관자A"},
-        period=Period(2026, 2),
-    )[0]
-
-    assert row.balance == 654.0
+    assert [row.balance for row in rows] == [None, 80.0]
 
 
-def test_detail_does_not_treat_lone_opening_balance_as_current_balance():
-    ledger = _ledger([("2026-06-30", "상품매출", "opening only")]).drop(
-        columns=["잔액"]
+def test_detail_does_not_reflect_unclassified_account_in_balance_column():
+    ledger = _ledger(
+        [
+            ("2026-01-03", "분류대상아님", "first"),
+            ("2026-06-30", "분류대상아님", "second"),
+        ]
     )
-    ledger["기초잔액"] = "111"
+    ledger.loc[:, ["차변", "대변", "잔액"]] = [
+        ["100", "0", "9,999"],
+        ["0", "20", "8,888"],
+    ]
 
-    row = build_statement_detail(
+    rows = build_statement_detail(
         ledger,
         mapping={"특관자A": "특관자A"},
         canonical={"특관자A"},
         period=Period(2026, 2),
-    )[0]
+    )
 
-    assert row.balance == 0.0
+    assert all(row.bucket is None for row in rows)
+    assert [row.balance for row in rows] == [None, None]
+
+
+def test_detail_adds_asset_opening_to_debit_and_keeps_only_terminal_balance():
+    ledger = _ledger(
+        [
+            ("2026-01-03", "외상매출금", "invoice"),
+            ("2026-06-30", "외상매출금", "collection"),
+        ]
+    )
+    ledger.loc[:, ["계정코드", "차변", "대변", "잔액"]] = [
+        ["1080000", "100", "0", "9,999"],
+        ["1080000", "0", "40", "8,888"],
+    ]
+    opening = pd.DataFrame(
+        [
+            {
+                "계정과목": "외상매출금",
+                "거래처": "특관자A",
+                "거래처코드": "V001",
+                "금액": "500",
+            }
+        ]
+    )
+
+    rows = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+        prev_balance=opening,
+    )
+
+    assert len(rows) == 3
+    assert rows[0].date == "[전기이월]"
+    assert rows[0].account_code == "10800"
+    assert rows[0].debit == 500.0
+    assert rows[0].credit == 0.0
+    assert [row.balance for row in rows] == [None, None, 560.0]
+
+
+def test_detail_adds_liability_opening_to_credit_and_uses_credit_nature_balance():
+    ledger = _ledger([("2026-06-30", "미지급금", "payment")])
+    ledger.loc[0, ["계정코드", "차변", "대변", "잔액"]] = [
+        "2530000",
+        "200",
+        "0",
+        "7,777",
+    ]
+    opening = pd.DataFrame(
+        [
+            {
+                "계정과목": "미지급금",
+                "거래처": "특관자A",
+                "거래처코드": "V001",
+                "금액": "500",
+            }
+        ]
+    )
+
+    rows = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+        prev_balance=opening,
+    )
+
+    assert rows[0].debit == 0.0
+    assert rows[0].credit == 500.0
+    assert [row.balance for row in rows] == [None, 300.0]
+
+
+def test_detail_orders_rows_into_contiguous_company_blocks():
+    ledger = _ledger(
+        [
+            ("2026-01-03", "상품매출", "A sale"),
+            ("2026-02-01", "상품매출", "B sale"),
+            ("2026-03-01", "미지급금", "A payable"),
+            ("2026-04-01", "상품매출", "A sale 2"),
+        ]
+    )
+    ledger.loc[1, "거래처명"] = "특관자B"
+    ledger.loc[1, "거래처코드"] = "V002"
+
+    rows = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A", "특관자B": "특관자B"},
+        canonical={"특관자A", "특관자B"},
+        period=Period(2026, 2),
+    )
+
+    assert [str(row.canonical_name) for row in rows] == [
+        "특관자A",
+        "특관자A",
+        "특관자A",
+        "특관자B",
+    ]
+    assert [row.description for row in rows] == [
+        "A sale",
+        "A sale 2",
+        "A payable",
+        "B sale",
+    ]
+    assert [row.balance for row in rows] == [None, 200.0, 100.0, 100.0]
+
+
+def test_detail_merges_balance_across_partner_codes_of_one_company():
+    ledger = _ledger(
+        [
+            ("2026-01-03", "외상매출금", "head office"),
+            ("2026-02-01", "외상매출금", "branch"),
+        ]
+    )
+    ledger.loc[0, ["계정코드", "차변", "대변"]] = ["1080000", "100", "0"]
+    ledger.loc[1, ["계정코드", "거래처코드", "거래처명", "차변", "대변"]] = [
+        "1080000",
+        "V002",
+        "특관자A지점",
+        "50",
+        "0",
+    ]
+
+    rows = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A", "특관자A지점": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )
+
+    assert len(rows) == 2
+    assert [row.balance for row in rows] == [None, 150.0]
+
+
+def test_detail_merges_opening_aliases_within_company_and_account():
+    ledger = _ledger([("2026-06-30", "외상매출금", "collection")])
+    ledger.loc[0, ["계정코드", "거래처코드", "거래처명", "차변", "대변"]] = [
+        "1080000",
+        "V001",
+        "특관자A",
+        "0",
+        "150",
+    ]
+    opening = pd.DataFrame(
+        [
+            {
+                "계정과목": "외상매출금",
+                "거래처": "특관자A",
+                "거래처코드": "V001",
+                "금액": "100",
+            },
+            {
+                "계정과목": "외상매출금",
+                "거래처": "특관자㈜",
+                "거래처코드": "V009",
+                "금액": "50",
+            },
+        ]
+    )
+
+    rows = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A", "특관자㈜": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+        prev_balance=opening,
+    )
+
+    assert len(rows) == 2
+    assert rows[0].date == "[전기이월]"
+    assert rows[0].debit == 150.0
+    assert rows[1].balance == 0.0
 
 
 def test_detail_row_categories_follow_aggregate_row_eligibility_rules():
@@ -437,11 +604,15 @@ def test_detail_row_categories_follow_aggregate_row_eligibility_rules():
         period=Period(2026, 2),
     )
 
-    assert [row.funding for row in rows[:4]] == [None, None, None, "자금대여"]
-    assert rows[4].income_expense is None
-    assert rows[4].bucket is None
-    assert rows[5].income_expense == "비용"
-    assert rows[5].bucket == "기타비용"
+    by_description = {row.description: row for row in rows}
+    assert by_description["전기 이월"].funding is None
+    assert by_description["대여금 상환"].funding is None
+    assert by_description["충당금"].funding is None
+    assert by_description["당기 신규 대여"].funding == "자금대여"
+    assert by_description["전대 차감"].income_expense is None
+    assert by_description["전대 차감"].bucket is None
+    assert by_description["정상 비용"].income_expense == "비용"
+    assert by_description["정상 비용"].bucket == "기타비용"
 
 
 def test_detail_fails_closed_when_given_out_of_period_row():

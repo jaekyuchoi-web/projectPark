@@ -99,6 +99,94 @@ def test_template_replaces_stale_q1_detail_with_q2_ytd_rows(tmp_path):
     assert detail["B17"].fill.fgColor.rgb == detail["B16"].fill.fgColor.rgb
 
 
+def test_template_writes_auditable_terminal_balance_formula_for_each_detail_group(
+    tmp_path,
+):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    first = _row("2026-01-03", "first")
+    last = StatementDetailRow(
+        **{
+            **first.__dict__,
+            "date": "2026-06-30",
+            "description": "last",
+            "debit": 20.0,
+            "credit": 0.0,
+            "balance": 80.0,
+        }
+    )
+    first = StatementDetailRow(**{**first.__dict__, "balance": None})
+
+    wb, _ = fill_statement_template(
+        template,
+        AggregateResult(),
+        Period(2026, 2),
+        [first, last],
+    )
+
+    detail = wb["39.1"]
+    assert detail["P16"].value is None
+    assert detail["P17"].value == "=SUM(O16:O17)-SUM(N16:N17)"
+
+
+def test_template_balance_formula_does_not_include_an_unclassified_group(tmp_path):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    first = _row("2026-01-03", "first classified")
+    unclassified = StatementDetailRow(
+        **{
+            **first.__dict__,
+            "bucket": None,
+            "sales_purchase": None,
+            "account_code": "99900",
+            "account_name": "분류대상아님",
+            "description": "unclassified",
+            "debit": 70.0,
+            "credit": 0.0,
+            "balance": None,
+        }
+    )
+    second = StatementDetailRow(
+        **{
+            **first.__dict__,
+            "account_code": "40200",
+            "account_name": "제품매출",
+            "description": "second classified",
+            "balance": 100.0,
+        }
+    )
+
+    wb, _ = fill_statement_template(
+        template,
+        AggregateResult(),
+        Period(2026, 2),
+        [first, unclassified, second],
+    )
+
+    detail = wb["39.1"]
+    assert detail["P17"].value is None
+    assert detail["P18"].value == "=SUM(O18:O18)-SUM(N18:N18)"
+
+
+def test_template_refreshes_392_detail_values_from_391_terminal_balances(tmp_path):
+    template = tmp_path / "template.xlsx"
+    _write_template(template)
+    source = load_workbook(template)
+    source["39.2"]["L2"] = "매출"
+    source["39.2"]["L3"] = "=[29]stale.xlsx!A1"
+    source.save(template)
+    source.close()
+
+    wb, _ = fill_statement_template(
+        template,
+        AggregateResult(),
+        Period(2026, 2),
+        [_row("2026-06-30", "sale")],
+    )
+
+    assert wb["39.2"]["L3"].value == 100.0
+
+
 def test_template_writer_preserves_equals_prefixed_detail_as_literal_text(tmp_path):
     template = tmp_path / "template.xlsx"
     output = tmp_path / "output.xlsx"
@@ -199,7 +287,7 @@ def test_template_cleanup_neutralizes_actual_formula_and_error_cells(tmp_path):
     )
 
     assert output["39.2"]["L3"].value == 0
-    assert output["39.2"]["M3"].value is None
+    assert output["39.2"]["M3"].value == 0.0
 
 
 def test_legacy_writer_preserves_equals_prefixed_detail_as_literal_text(

@@ -28,3 +28,16 @@ def test_index_renders_period_inputs():
     assert r.status_code == 200
     assert "period-year" in r.text
     assert "period-quarter" in r.text
+
+
+def test_cors_exposes_content_disposition_for_downloads():
+    from starlette.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/config", headers={"Origin": "https://hg-affiliate.web.app"}
+    )
+    exposed = response.headers.get("access-control-expose-headers", "")
+    assert "content-disposition" in exposed.lower()
