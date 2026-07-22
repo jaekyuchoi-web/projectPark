@@ -234,7 +234,7 @@ def _write_statement_detail(
             cell.hyperlink = None
 
     group_first_row = _DETAIL_FIRST_ROW
-    previous_group_key: tuple[str, str, str] | None = None
+    previous_group_key: tuple[str, str] | None = None
     for offset, detail in enumerate(rows):
         target_row = _DETAIL_FIRST_ROW + offset
         current_group_key = detail_group_key(detail)

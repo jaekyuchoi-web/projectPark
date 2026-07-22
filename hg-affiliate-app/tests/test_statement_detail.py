@@ -476,7 +476,68 @@ def test_detail_adds_liability_opening_to_credit_and_uses_credit_nature_balance(
     assert [row.balance for row in rows] == [None, 300.0]
 
 
-def test_detail_merges_opening_aliases_only_within_same_partner_code_and_account():
+def test_detail_orders_rows_into_contiguous_company_blocks():
+    ledger = _ledger(
+        [
+            ("2026-01-03", "상품매출", "A sale"),
+            ("2026-02-01", "상품매출", "B sale"),
+            ("2026-03-01", "미지급금", "A payable"),
+            ("2026-04-01", "상품매출", "A sale 2"),
+        ]
+    )
+    ledger.loc[1, "거래처명"] = "특관자B"
+    ledger.loc[1, "거래처코드"] = "V002"
+
+    rows = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A", "특관자B": "특관자B"},
+        canonical={"특관자A", "특관자B"},
+        period=Period(2026, 2),
+    )
+
+    assert [str(row.canonical_name) for row in rows] == [
+        "특관자A",
+        "특관자A",
+        "특관자A",
+        "특관자B",
+    ]
+    assert [row.description for row in rows] == [
+        "A sale",
+        "A sale 2",
+        "A payable",
+        "B sale",
+    ]
+    assert [row.balance for row in rows] == [None, 200.0, 100.0, 100.0]
+
+
+def test_detail_merges_balance_across_partner_codes_of_one_company():
+    ledger = _ledger(
+        [
+            ("2026-01-03", "외상매출금", "head office"),
+            ("2026-02-01", "외상매출금", "branch"),
+        ]
+    )
+    ledger.loc[0, ["계정코드", "차변", "대변"]] = ["1080000", "100", "0"]
+    ledger.loc[1, ["계정코드", "거래처코드", "거래처명", "차변", "대변"]] = [
+        "1080000",
+        "V002",
+        "특관자A지점",
+        "50",
+        "0",
+    ]
+
+    rows = build_statement_detail(
+        ledger,
+        mapping={"특관자A": "특관자A", "특관자A지점": "특관자A"},
+        canonical={"특관자A"},
+        period=Period(2026, 2),
+    )
+
+    assert len(rows) == 2
+    assert [row.balance for row in rows] == [None, 150.0]
+
+
+def test_detail_merges_opening_aliases_within_company_and_account():
     ledger = _ledger([("2026-06-30", "외상매출금", "collection")])
     ledger.loc[0, ["계정코드", "거래처코드", "거래처명", "차변", "대변"]] = [
         "1080000",
@@ -496,7 +557,7 @@ def test_detail_merges_opening_aliases_only_within_same_partner_code_and_account
             {
                 "계정과목": "외상매출금",
                 "거래처": "특관자㈜",
-                "거래처코드": "V001",
+                "거래처코드": "V009",
                 "금액": "50",
             },
         ]

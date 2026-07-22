@@ -182,13 +182,11 @@ def _account_key(value: object) -> str:
     return re.sub(r"[\s\u3000]", "", _clean_text(value)).casefold()
 
 
-def detail_group_key(row: StatementDetailRow) -> tuple[str, str, str]:
-    """Return the contiguous 39.1 balance group identity."""
-    partner_identity = _clean_text(row.partner_code) or _clean_text(row.canonical_name)
+def detail_group_key(row: StatementDetailRow) -> tuple[str, str]:
+    """Return the contiguous 39.1 balance group identity: (company, account)."""
     return (
         _clean_text(row.canonical_name),
         _account_key(row.account_name),
-        partner_identity,
     )
 
 
@@ -260,7 +258,7 @@ def _opening_rows(
         positions.get(partner_code_col) if partner_code_col else None
     )
 
-    by_group: dict[tuple[str, str, str], list[StatementDetailRow]] = {}
+    by_group: dict[tuple[str, str], list[StatementDetailRow]] = {}
     for source in C.array_rows(prev_balance):
         partner_name = _clean_text(source[partner_position])
         canonical_name = mapping.get(partner_name)
@@ -422,7 +420,7 @@ def build_statement_detail(
     account_codes = _ledger_opening_account_codes(
         ledger, account_position, account_code_position
     )
-    grouped: dict[tuple[str, str, str], list[StatementDetailRow]] = {}
+    grouped: dict[tuple[str, str], list[StatementDetailRow]] = {}
     for opening in _opening_rows(
         prev_balance, mapping, canonical, account_codes
     ):
@@ -474,8 +472,16 @@ def build_statement_detail(
         )
         grouped.setdefault(detail_group_key(row), []).append(row)
 
+    group_order = {key: index for index, key in enumerate(grouped)}
+    company_order: dict[str, int] = {}
+    for key in grouped:
+        company_order.setdefault(key[0], group_order[key])
+
     rows: list[StatementDetailRow] = []
-    for group in grouped.values():
+    for key in sorted(
+        grouped, key=lambda item: (company_order[item[0]], group_order[item])
+    ):
+        group = grouped[key]
         last = group[-1]
         # The template's summary and 39.2 detail blocks intentionally reflect only
         # classified buckets.  Leaving P blank for an unclassified account preserves
