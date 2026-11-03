@@ -100,3 +100,20 @@ def test_pivot_recovery_source_cannot_overwrite_aliases(tmp_path):
     seed = seed_from_name_pivot(path)
     assert seed['별칭'] == '대표법인'
     assert '거래처명' not in seed
+
+
+def test_name_table_reads_explicit_alias_column_without_importing_titles(tmp_path):
+    from openpyxl import Workbook
+    from app.normalize import seed_from_name_pivot
+    wb = Workbook()
+    ws = wb.active
+    ws.append(['HLB글로벌(주) 특수관계자 지배구조'])
+    ws.append([])
+    ws.append(['정규(대표) 법인명', '구분', 'HLB글로벌과의 관계', '분개장 이표기(별칭)', '비고'])
+    ws.append(['대표법인', '기타특수관계자', '특수관계자', '옛이름, 지점명', '검토'])
+    ws.append(['에이치엘비오션테크', '', '', '바다중공업,에이치엘비오션테크'])
+    path = tmp_path / 'names.xlsx'
+    wb.save(path)
+    seed = seed_from_name_pivot(path)
+    assert seed == {'대표법인': '대표법인', '옛이름': '대표법인', '지점명': '대표법인',
+                    '에이치엘비오션테크': '에이치엘비오션테크', '바다중공업': '에이치엘비오션테크'}

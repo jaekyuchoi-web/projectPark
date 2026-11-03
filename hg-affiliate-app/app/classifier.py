@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import unicodedata
 
 from .config import SLOT_KEYS
 import pandas as pd
@@ -61,7 +62,7 @@ def _text_blob(
                     s = str(v).strip()
                     if s and s != "nan" and not _looks_numeric(s):
                         parts.append(s)
-    return " ".join(parts).lower()
+    return unicodedata.normalize('NFC', " ".join(parts)).lower()
 
 
 def _looks_numeric(s: str) -> bool:
@@ -74,12 +75,29 @@ def classify(
     original_name: str,
     sheets: dict[str, pd.DataFrame] | None = None,
 ) -> ClassifyResult:
+    if sheets is None:
+        try:
+            sheets = read_workbook(path)
+        except Exception:  # noqa: BLE001 - classification remains best-effort
+            sheets = {}
     blob = _text_blob(path, original_name, sheets=sheets)
     scores: dict[str, int] = {k: 0 for k in SLOT_KEYS}
     for slot, kws in SLOT_KEYWORDS.items():
         for kw in kws:
             if kw.lower() in blob:
                 scores[slot] += 1
+
+    # 지배구조 출력물을 상호 정리 입력으로 재사용할 수 있다. 제목의
+    # '지배구조'보다 대표명/별칭 표의 헤더를 우선한다.
+    for frame in sheets.values():
+        if frame is None or frame.empty:
+            continue
+        for row in frame.head(15).to_numpy(dtype=object):
+            labels = {''.join(unicodedata.normalize('NFC', str(value)).split()) for value in row}
+            if (labels & {'정규(대표)법인명', '대표법인명'}
+                    and labels & {'분개장이표기(별칭)', '별칭'}):
+                scores['name_pivot'] += 100
+                return ClassifyResult(slot='name_pivot', scores=scores)
 
     # 동률/0점 처리: 특정 강한 신호 보정
     # '명세서' 가 있는데 '전기/이월' 신호가 약하면 전기 명세서로

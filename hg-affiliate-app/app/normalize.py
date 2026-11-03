@@ -47,9 +47,9 @@ def _norm_key(name: str) -> str:
 
 
 def seed_from_name_pivot(path: Path | None) -> dict[str, str]:
-    """특관자 상호 정리 파일의 들여쓰기 구조로 1차 매핑을 만든다.
+    """특관자 상호 정리의 대표명/별칭 표 또는 들여쓰기 구조를 읽는다.
 
-    openpyxl 로 A열을 순회하며 alignment.indent 를 사용.
+    표 형식은 헤더로 대표명/별칭 열을 찾고, 피벗 형식은 A열 indent를 사용한다.
     """
     norm: dict[str, str] = {}
     if path is None or not path.exists() or path.suffix.lower() not in {".xlsx", ".xlsm"}:
@@ -63,6 +63,32 @@ def seed_from_name_pivot(path: Path | None) -> dict[str, str]:
     for ws in wb.worksheets:
         # 피벗 캐시 복구용 원시 행은 대표명/별칭의 들여쓰기 표가 아니다.
         if ws.title.startswith('_복구_'):
+            continue
+        # 생성된 지배구조 표를 상호 정리 입력으로 재사용하는 경우.
+        # 제목을 법인으로 읽지 않고 대표명/별칭 열을 명시적으로 해석한다.
+        table_header = None
+        for row_number, row in enumerate(ws.iter_rows(max_row=15), 1):
+            labels = {re.sub(r'\s+', '', str(c.value or '')): column
+                      for column, c in enumerate(row, 1)}
+            name_col = labels.get('정규(대표)법인명') or labels.get('대표법인명')
+            alias_col = labels.get('분개장이표기(별칭)') or labels.get('별칭')
+            if name_col and alias_col:
+                table_header = (row_number, name_col, alias_col)
+                break
+        if table_header is not None:
+            header_row, name_col, alias_col = table_header
+            for row in ws.iter_rows(min_row=header_row + 1):
+                value = row[name_col - 1].value
+                if is_aggregate_label(value):
+                    continue
+                name = str(value).strip()
+                norm[name] = name
+                aliases = row[alias_col - 1].value
+                if aliases is not None:
+                    for alias in re.split(r'[,;\n]', str(aliases)):
+                        alias = alias.strip()
+                        if not is_aggregate_label(alias):
+                            norm[alias] = name
             continue
         cur = None
         for row in ws.iter_rows(min_col=1, max_col=1):
@@ -183,10 +209,10 @@ def normalize_names(
     """전체 정규화 수행."""
     result = NormalizationResult()
 
-    # 1) indent 시드
+    # 1) 명시적 대표명/별칭 표 또는 indent 시드
     norm = seed_from_name_pivot(name_pivot_path)
     if norm:
-        result.method_notes.append("특관자 상호 정리(들여쓰기) 1차 매핑 적용")
+        result.method_notes.append("특관자 상호 정리(대표명·별칭/들여쓰기) 1차 매핑 적용")
 
     # 시드의 정규명 집합 (특관자 후보)
     canonical = set(norm.values())
