@@ -70,7 +70,7 @@ class StatementDetailRow:
 
 
 _RECEIVABLE_BUCKETS = {"매출채권", "대여금", "기타채권", "투자전환사채"}
-_PAYABLE_BUCKETS = {"기타채무", "발행전환사채", "매입채무"}
+_PAYABLE_BUCKETS = {"기타채무", "발행전환사채", "매입채무", "차입금", "대손충당금"}
 _OPENING_LABEL = "[전기이월]"
 
 
@@ -150,6 +150,8 @@ def _classify(
         sales_purchase, bucket = "매출", "매출"
     elif C.match_bucket(name, C.INTEREST_INCOME_KEYWORDS):
         income_expense, bucket = "이자수익", "이자수익"
+    elif C.match_bucket(name, C.OTHER_INCOME_KEYWORDS):
+        income_expense, bucket = "기타수익", "기타수익"
     elif C.match_bucket(name, C.PURCHASE_KEYWORDS):
         sales_purchase, bucket = "매입", "매입"
     elif C.is_purchase_other_eligible(name, debit, credit):
@@ -165,8 +167,17 @@ def _classify(
                 bucket = balance_bucket
             break
 
-    if C.is_fund_lending_eligible(name, debit, row_values):
-        funding = "자금대여"
+    if C.match_bucket(name, C.ALLOWANCE_KEYWORDS):
+        bucket = "대손충당금"
+    elif C.match_bucket(name, C.ALLOWANCE_EXPENSE_KEYWORDS):
+        income_expense, bucket = "비용", "대손상각비"
+    if not any(token in ' '.join(map(str, row_values)) for token in C.FUND_LENDING_CARRYFORWARD_TEXTS):
+        if C.match_bucket(name, C.LENDING_KEYWORDS):
+            funding = "자금대여" if debit else "자금대여상환"
+        elif C.match_bucket(name, C.BALANCE_BUCKETS['차입금']):
+            funding = "차입" if credit else "차입상환"
+        elif C.match_bucket(name, C.BALANCE_BUCKETS['투자전환사채']):
+            funding = "투자전환사채취득" if debit else "투자전환사채처분"
 
     return sales_purchase, funding, receivable_payable, income_expense, bucket
 
@@ -192,6 +203,8 @@ def detail_group_key(row: StatementDetailRow) -> tuple[str, str]:
 
 def _balance_bucket(account: object) -> str | None:
     name = str(account)
+    if C.match_bucket(name, C.ALLOWANCE_KEYWORDS):
+        return "대손충당금"
     for bucket, keywords in C.BALANCE_BUCKETS.items():
         if C.match_bucket(name, keywords, C.BALANCE_EXCLUDE.get(bucket)):
             return bucket

@@ -4,9 +4,8 @@
 38.1~38.5 버킷을 산출한다. 산출 불가/불일치는 ErrorLog 에 기록한다.
 
 용어 — "전기"(prev_balance)는 전년도 온기(연간 결산 = 4분기) 잔액이다.
-같은 해 직전분기 자료는 참고할 수 있으나 전기가 아니다. 아래 증감/역산
-(대손충당금·미수수익)과 재구성 검증은 이 전기말 기준선과 당기 원장
-누적액 사이의 차이로 계산한다.
+38.3은 전기 충당금에 당기 원장 증감을 더하고, 상각비는 당기 원장에서만
+집계한다. 미수수익 잔액 차이를 수익으로 역산하지 않는다.
 
 주의: 어떤 산출 '수치'도 로그/화면으로 내보내지 않는다. 결과는 출력 엑셀에만 기록.
 """
@@ -35,9 +34,16 @@ class Aggregate:
     other_ap: float = 0.0       # 38.2 기타채무
     cb_issued: float = 0.0      # 38.2 발행전환사채
     ap: float = 0.0             # 38.2 매입채무
+    borrowing: float = 0.0
+    allowance_opening: float = 0.0
     allowance_end: float = 0.0  # 38.3 당기말 대손충당금
     allowance_expense: float = 0.0  # 38.3 당기 대손상각비(환입이면 음수)
     fund_lending: float = 0.0   # 38.4 자금대여(당기 발생분)
+    fund_collection: float = 0.0
+    fund_borrowing: float = 0.0
+    fund_repayment: float = 0.0
+    fund_investment: float = 0.0
+    fund_disposal: float = 0.0
     # 38.5 경영진 보상은 산출 불가 → 공란 (값 없음)
 
 
@@ -88,7 +94,12 @@ def aggregate_ledger(
                    "헤더에 계정과목·차변·대변 컬럼명이 포함되도록 정리해 주세요.")
         return
 
-    accrued_net: dict[str, float] = {}  # 원장상 미수수익 순증 (대변-차변 아님: 자산이므로 차변-대변)
+    opening = _balance_by_canon(prev_balance, mapping, canonical, C.ALLOWANCE_KEYWORDS)
+    for canon in set(result.by_canonical) | set(opening):
+        agg = result.get(canon)
+        agg.allowance_opening = opening.get(canon, 0.0)
+        agg.allowance_end = agg.allowance_opening
+        agg.allowance_expense = 0.0
 
     for canon, row, positions in _iter_rows(ledger, mapping, canonical):
         acc = str(C.array_row_value(row, positions, acc_col, ""))
@@ -99,39 +110,39 @@ def aggregate_ledger(
         # 매출 (대변-차변)
         if C.match_bucket(acc, C.SALES_KEYWORDS):
             agg.sales += credit - debit
-        # 매출등 기타 = 이자수익
-        elif C.match_bucket(acc, C.INTEREST_INCOME_KEYWORDS):
+        # 기타수익 = 이자수익·수입임대료·잡이익
+        elif C.match_bucket(acc, C.OTHER_INCOME_KEYWORDS):
             agg.sales_other += credit - debit
-        # 매입 = 원재료 (차변-대변)
+        # 매입 = 원재료·상품·유무형자산 취득 (차변-대변)
         elif C.match_bucket(acc, C.PURCHASE_KEYWORDS):
             agg.purchase += debit - credit
-        # 매입등 기타 = 기타비용 순액 + 자산취득
+        # 기타비용 = 지정된 비용 계정의 차변-대변
         elif C.is_purchase_other_eligible(acc, debit, credit):
             agg.purchase_other += debit - credit
 
-        # 미수수익 원장 순증 (잔액증감 역산용)
-        if C.match_bucket(acc, C.ACCRUED_INCOME_KEYWORDS, exclude=C.ALLOWANCE_KEYWORDS):
-            accrued_net[canon] = accrued_net.get(canon, 0.0) + (debit - credit)
+        if C.match_bucket(acc, C.ALLOWANCE_KEYWORDS):
+            agg.allowance_end += credit - debit
+        if C.match_bucket(acc, C.ALLOWANCE_EXPENSE_KEYWORDS):
+            agg.allowance_expense += debit - credit
 
-        # 38.4 자금대여 = 단기·장기대여금 차변 증가(이전 기간 블록/충당금 제외)
-        if C.is_fund_lending_eligible(acc, debit, row):
-            agg.fund_lending += debit
+        # 38.4: 당기 차변/대변을 각각 집계한다. 이월은 거래가 아니다.
+        if not any(token in ' '.join(map(str, row)) for token in C.FUND_LENDING_CARRYFORWARD_TEXTS):
+            if C.match_bucket(acc, C.LENDING_KEYWORDS):
+                agg.fund_lending += debit
+                agg.fund_collection += credit
+            elif C.match_bucket(acc, C.BALANCE_BUCKETS['차입금']):
+                agg.fund_borrowing += credit
+                agg.fund_repayment += debit
+            elif C.match_bucket(acc, C.BALANCE_BUCKETS['투자전환사채']):
+                agg.fund_investment += debit
+                agg.fund_disposal += credit
 
-    # 매출등 기타: 이자수익 + 미수수익 잔액증감 역산(당기말-전기이월-원장순증)
-    prev_accrued = _balance_by_canon(prev_balance, mapping, canonical, C.ACCRUED_INCOME_KEYWORDS,
-                                      exclude=C.ALLOWANCE_KEYWORDS)
-    cur_accrued = _balance_by_canon(current_balance, mapping, canonical, C.ACCRUED_INCOME_KEYWORDS,
-                                     exclude=C.ALLOWANCE_KEYWORDS)
-    prev_allow = _balance_by_canon(prev_balance, mapping, canonical, C.ALLOWANCE_KEYWORDS)
-    cur_allow = _balance_by_canon(current_balance, mapping, canonical, C.ALLOWANCE_KEYWORDS)
+    actual = _balance_by_canon(current_balance, mapping, canonical, C.ALLOWANCE_KEYWORDS)
     for canon, agg in result.by_canonical.items():
-        if canon not in prev_accrued and canon not in cur_accrued:
-            continue
-        delta = cur_accrued.get(canon, 0.0) - prev_accrued.get(canon, 0.0) - accrued_net.get(canon, 0.0)
-        allowance_delta = cur_allow.get(canon, 0.0) - prev_allow.get(canon, 0.0)
-        if _same_abs_amount(delta, allowance_delta):
-            continue
-        agg.sales_other += delta
+        if current_balance is not None and abs(agg.allowance_end - actual.get(canon, 0.0)) > 1:
+            errors.add('검증 불일치', f'{canon} / 대손충당금',
+                       '전기잔액과 당기 원장으로 계산한 충당금이 검증용 잔액과 다름',
+                       '38.3은 규칙에 따라 전기잔액+당기 증감을 유지했습니다. 조정분개를 확인하세요.')
 
 
 def _balance_by_canon(
@@ -158,11 +169,6 @@ def _balance_by_canon(
     return out
 
 
-def _same_abs_amount(left: float, right: float, tolerance: float = 1.0) -> bool:
-    """원 단위 반올림 차이를 허용해 두 금액의 절대값이 같은지."""
-    return abs(right) > tolerance and abs(abs(left) - abs(right)) <= tolerance
-
-
 def aggregate_balance(
     current_balance: pd.DataFrame | None,
     prev_balance: pd.DataFrame | None,
@@ -171,7 +177,7 @@ def aggregate_balance(
     result: AggregateResult,
     errors: ErrorLog,
 ) -> None:
-    """38.2 채권채무 잔액 + 38.3 대손충당금 (당기말 검증용 잔액명세서 기준)."""
+    """38.2 검증용 잔액 집계. 38.3은 aggregate_ledger에서 별도 계산한다."""
     if current_balance is None:
         errors.add("산출 불가", "당기말 잔액명세서", "검증용 잔액명세서가 없어 38.2/38.3 집계 불가",
                    "당기 채권채무 잔액 검증용 소스를 올려주세요.")
@@ -180,7 +186,7 @@ def aggregate_balance(
     bucket_attr = {
         "매출채권": "ar", "대여금": "loan", "기타채권": "other_ar",
         "투자전환사채": "cb_invest", "기타채무": "other_ap",
-        "발행전환사채": "cb_issued", "매입채무": "ap",
+        "발행전환사채": "cb_issued", "매입채무": "ap", "차입금": "borrowing",
     }
     for bucket, kws in C.BALANCE_BUCKETS.items():
         ex = C.BALANCE_EXCLUDE.get(bucket)
@@ -188,14 +194,12 @@ def aggregate_balance(
         for canon, v in vals.items():
             setattr(result.get(canon), bucket_attr[bucket], v)
 
-    # 38.3 대손충당금
-    cur_allow = _balance_by_canon(current_balance, mapping, canonical, C.ALLOWANCE_KEYWORDS)
+    # 38.3 시작점만 설정한다. 원장 없이는 상각비를 잔액 차이로 추정하지 않는다.
     prev_allow = _balance_by_canon(prev_balance, mapping, canonical, C.ALLOWANCE_KEYWORDS)
-    for canon, end in cur_allow.items():
+    for canon, opening in prev_allow.items():
         agg = result.get(canon)
-        agg.allowance_end = end
-        inc = end - prev_allow.get(canon, 0.0)
-        agg.allowance_expense = inc
+        agg.allowance_opening = opening
+        agg.allowance_end = opening
 
     # 투자/발행 전환사채 보유자 확인 필요 → 검토 항목
     if any(result.get(c).cb_invest or result.get(c).cb_issued for c in result.by_canonical):

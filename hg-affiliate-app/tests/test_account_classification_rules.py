@@ -202,7 +202,7 @@ def test_aggregate_ledger_avoids_iterrows_for_period_metadata(monkeypatch):
     ledger = pd.DataFrame(
         [
             {
-                "계정명": "상품매출",
+                "계정명": "제품매출",
                 "거래처명": "특관자A",
                 "차변": "0",
                 "대변": "100",
@@ -298,7 +298,7 @@ def test_aggregate_row_eligibility_excludes_nonqualifying_detail_categories():
     )
 
     assert result.get("특관자A").fund_lending == 100
-    assert result.get("특관자A").purchase_other == 100
+    assert result.get("특관자A").purchase_other == 0
 
 
 def test_interest_income_is_not_offset_when_accrued_balance_source_is_absent():
@@ -431,5 +431,14 @@ def test_allowance_reversal_stays_in_allowance_expense_as_negative():
         errors=ErrorLog(),
     )
 
+    # 새 규칙에서는 잔액차이를 상각비로 추정하지 않는다.
+    assert result.get("특관자A").allowance_end == 7_264_104_108
+    assert result.get("특관자A").allowance_expense == 0
+    ledger = pd.DataFrame([
+        {"계정명": "대손충당금(미수수익)", "거래처명": "특관자A", "차변": 764_104_108, "대변": 0},
+        {"계정명": "기타의대손상각비", "거래처명": "특관자A", "차변": 0, "대변": 764_104_108},
+    ])
+    aggregate_ledger(ledger, prev_balance, current_balance,
+                     {"특관자A": "특관자A"}, {"특관자A"}, result, ErrorLog())
     assert result.get("특관자A").allowance_end == 6_500_000_000
     assert result.get("특관자A").allowance_expense == -764_104_108

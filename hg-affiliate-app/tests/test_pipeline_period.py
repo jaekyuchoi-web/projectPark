@@ -38,7 +38,7 @@ def _make_ledger_with_literal_description(path, description: str) -> None:
     wb = Workbook()
     ws = wb.active
     ws.append(["계정명", "날짜", "거래처명", "적요", "차변", "대변"])
-    ws.append(["상품매출", "2026-06-30", "특관자A", description, "0", "100"])
+    ws.append(["제품매출", "2026-06-30", "특관자A", description, "0", "100"])
     description_cell = ws.cell(row=2, column=4)
     description_cell.data_type = "s"
     wb.save(path)
@@ -141,7 +141,7 @@ def test_run_pipeline_blocks_deduplicated_required_uploaded_header(
     tmp_path, duplicate
 ):
     headers = ["계정명", "날짜", "거래처명", "차변", "대변"]
-    values = ["상품매출", "2026-06-30", "특관자A", "0", "100"]
+    values = ["제품매출", "2026-06-30", "특관자A", "0", "100"]
     position = headers.index(duplicate) + 1
     headers.insert(position, duplicate)
     values.insert(position, "duplicate")
@@ -204,9 +204,9 @@ def test_run_pipeline_q2_uses_january_through_june_for_summary_and_detail(
     _make_ledger(
         ledger,
         [
-            ["상품매출", "2026-01-03", "특관자A", "0", "100"],
-            ["상품매출", "2026-06-30", "특관자A", "0", "200"],
-            ["상품매출", "2026-07-01", "특관자A", "0", "400"],
+            ["제품매출", "2026-01-03", "특관자A", "0", "100"],
+            ["제품매출", "2026-06-30", "특관자A", "0", "200"],
+            ["제품매출", "2026-07-01", "특관자A", "0", "400"],
         ],
     )
 
@@ -261,7 +261,7 @@ def test_run_pipeline_avoids_iterrows_for_period_filtered_ledger(tmp_path, monke
     ledger = tmp_path / "ledger.xlsx"
     _make_ledger(
         ledger,
-        [["상품매출", "2026-06-30", "특관자A", "0", "100"]],
+        [["제품매출", "2026-06-30", "특관자A", "0", "100"]],
     )
 
     outcome = run_pipeline(
@@ -365,7 +365,7 @@ def test_run_pipeline_blocks_detail_failure_without_leaking_accounting_values(
 
     secret = "sensitive transaction description 12345"
     ledger = tmp_path / "ledger.xlsx"
-    _make_ledger(ledger, [["상품매출", "2026-06-30", "특관자A", "0", "100"]])
+    _make_ledger(ledger, [["제품매출", "2026-06-30", "특관자A", "0", "100"]])
 
     def fail_detail(*args, **kwargs):
         raise StatementDetailError(secret)
@@ -397,7 +397,7 @@ def test_run_pipeline_statement_writer_failure_is_generic_and_never_leaks_except
 
     sentinel = "TRANSACTION_SENTINEL_SHOULD_NEVER_ESCAPE"
     ledger = tmp_path / "ledger.xlsx"
-    _make_ledger(ledger, [["상품매출", "2026-06-30", "특관자A", "0", "100"]])
+    _make_ledger(ledger, [["제품매출", "2026-06-30", "특관자A", "0", "100"]])
 
     if failure_stage == "build":
         def fail_build(*args, **kwargs):

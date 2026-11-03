@@ -144,13 +144,18 @@ def array_row_value(
 
 
 # ── 계정 분류 키워드 (38.1 거래내역) ──────────────────────────────
-SALES_KEYWORDS = ["제품매출", "상품매출", "용역매출", "미디어사업매출", "렌탈료수익"]
+SALES_KEYWORDS = ["제품매출", "용역매출", "미디어사업매출"]
 INTEREST_INCOME_KEYWORDS = ["이자수익"]
+OTHER_INCOME_KEYWORDS = ["이자수익", "수입임대료", "잡이익"]
 ACCRUED_INCOME_KEYWORDS = ["미수수익"]
-PURCHASE_KEYWORDS = ["원재료"]
+PURCHASE_KEYWORDS = ["원재료", "상품", "구축물", "기계장치", "차량운반구", "공구와기구",
+                     "비품", "건설중인자산", "선박", "시설장치", "금형", "영업권", "특허권",
+                     "상표권", "의장권", "소프트웨어", "회원권", "브랜드가치", "건설중인자산_무형"]
 OTHER_EXPENSE_KEYWORDS = [
     "접대비", "복리후생비", "여비교통비", "운반비",
     "지급임차료", "판매수수료", "지급수수료", "보험료",
+    "통신비", "수선비", "차량유지비", "교육훈련비", "도서인쇄비", "소모품비",
+    "광고선전비", "이자비용", "잡손실", "고객손해배상금",
 ]
 ASSET_ACQUIRE_KEYWORDS = ["건설중인자산", "건설중인자산_무형", "상표권", "시설장치"]
 LENDING_KEYWORDS = ["단기대여금", "장기대여금"]
@@ -160,9 +165,10 @@ FUND_LENDING_CARRYFORWARD_TEXTS = ["이월", "전기", "전반기"]
 BALANCE_BUCKETS: dict[str, list[str]] = {
     "매출채권": ["외상매출금", "받을어음"],
     "대여금": LENDING_KEYWORDS,
-    "기타채권": ["미수금", "미수수익", "선급금"],
-    "투자전환사채": ["전환사채(투자", "투자전환사채", "전환사채투자"],
-    "기타채무": ["미지급금", "선수금", "예수금"],
+    "기타채권": ["미수금", "미수금(기타)", "미수수익", "선급금", "임차보증금(유동)", "임차보증금", "기타보증금"],
+    "투자전환사채": ["FVPL측정금융자산", "FVPL금융자산"],
+    "기타채무": ["미지급금", "미지급금(기타)", "선수금", "미지급비용"],
+    "차입금": ["단기차입금"],
     "발행전환사채": ["전환사채(발행", "발행전환사채", "전환사채발행"],
     "매입채무": ["외상매입금"],
 }
@@ -171,17 +177,19 @@ BALANCE_EXCLUDE = {
     "매출채권": ["장기외상매출금"],
     "대여금": ["대손충당금"],
 }
-ALLOWANCE_KEYWORDS = ["대손충당금"]
+ALLOWANCE_KEYWORDS = ["대손충당금", "대손충당금(단기대여금)", "대손충당금(장기대여금)",
+                      "대손충당금(미수금)", "대손충당금(미수수익)"]
+ALLOWANCE_EXPENSE_KEYWORDS = ["기타의대손상각비"]
 
 
 def match_bucket(account: str, keywords: list[str], exclude: list[str] | None = None) -> bool:
-    a = re.sub(r"[\s\u3000]", "", str(account))
+    a = re.sub(r"[\s\u3000]", "", str(account)).rstrip("._")
     if exclude:
         for ex in exclude:
             if re.sub(r"[\s\u3000]", "", ex) in a:
                 return False
     for kw in keywords:
-        if re.sub(r"[\s\u3000]", "", kw) in a:
+        if re.sub(r"[\s\u3000]", "", kw).rstrip("._") == a:
             return True
     return False
 
@@ -189,11 +197,9 @@ def match_bucket(account: str, keywords: list[str], exclude: list[str] | None = 
 def is_purchase_other_eligible(account: object, debit: float, credit: float) -> bool:
     """Whether a ledger row contributes to 38.1 purchase-other."""
     name = str(account)
-    if match_bucket(name, ASSET_ACQUIRE_KEYWORDS):
-        return True
     if not match_bucket(name, OTHER_EXPENSE_KEYWORDS):
         return False
-    return not (match_bucket(name, ["지급임차료"]) and debit - credit < 0)
+    return True
 
 
 def is_fund_lending_eligible(

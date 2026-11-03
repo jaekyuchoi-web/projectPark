@@ -109,6 +109,8 @@ def verify_output(path: Path) -> CheckResult:
         recalced = _recalc_with_libreoffice(path, soffice)
         if recalced is not None:
             bad = _scan_workbook_for_errors(recalced)
+            if not bad:
+                shutil.copy2(recalced, path)
             shutil.rmtree(recalced.parent, ignore_errors=True)
             if bad:
                 return CheckResult(False, f"재계산 후 수식 오류 발견: {bad}", True)

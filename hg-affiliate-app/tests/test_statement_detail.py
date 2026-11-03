@@ -40,12 +40,12 @@ class _DeepcopyBomb:
 def test_q2_detail_is_january_through_june_not_april_through_june():
     ledger = _ledger(
         [
-            ("2026-01-03", "상품매출", "January"),
-            ("2026-03-31", "상품매출", "March"),
-            ("2026-04-01", "상품매출", "April"),
-            ("2026-06-30", "상품매출", "June"),
-            ("2026-07-01", "상품매출", "July"),
-            ("2025-12-31", "상품매출", "Prior year"),
+            ("2026-01-03", "제품매출", "January"),
+            ("2026-03-31", "제품매출", "March"),
+            ("2026-04-01", "제품매출", "April"),
+            ("2026-06-30", "제품매출", "June"),
+            ("2026-07-01", "제품매출", "July"),
+            ("2025-12-31", "제품매출", "Prior year"),
         ]
     )
     extracted = extract_current_period(ledger, Period(2026, 2))
@@ -67,7 +67,7 @@ def test_q2_detail_is_january_through_june_not_april_through_june():
 
 
 def test_detail_uses_ai_rescued_period_metadata_without_reparsing():
-    ledger = _ledger([("이천이십육년 유월", "상품매출", "AI rescued")])
+    ledger = _ledger([("이천이십육년 유월", "제품매출", "AI rescued")])
     extracted = extract_current_period(
         ledger,
         Period(2026, 2),
@@ -91,9 +91,9 @@ def test_detail_avoids_iterrows_and_preserves_row_aligned_period_metadata(
 ):
     ledger = _ledger(
         [
-            ("2026-01-03", "상품매출", "first"),
+            ("2026-01-03", "제품매출", "first"),
             ("2026-06-30", "단기대여금", "second"),
-            ("이천이십육년 유월", "상품매출", "AI rescued"),
+            ("이천이십육년 유월", "제품매출", "AI rescued"),
         ]
     )
     ledger.loc[:, ["차변", "대변", "잔액"]] = [
@@ -148,7 +148,7 @@ def test_detail_avoids_iterrows_and_preserves_row_aligned_period_metadata(
     ],
 )
 def test_detail_fails_closed_for_duplicate_selected_column(column, position):
-    ledger = _ledger([("2026-06-30", "상품매출", "duplicate")])
+    ledger = _ledger([("2026-06-30", "제품매출", "duplicate")])
     ledger.insert(position, column, "duplicate", allow_duplicates=True)
 
     with pytest.raises(StatementDetailError, match="필수 열") as exc_info:
@@ -167,7 +167,7 @@ def test_detail_rejects_deduplicated_selected_source_headers_after_extraction(
     duplicate,
 ):
     headers = ["계정명", "날짜", "거래처명", "적요", "차변", "대변"]
-    values = ["상품매출", "2026-06-30", "특관자A", "source duplicate", "0", "100"]
+    values = ["제품매출", "2026-06-30", "특관자A", "source duplicate", "0", "100"]
     position = headers.index(duplicate) + 1
     headers.insert(position, duplicate)
     values.insert(position, "duplicate")
@@ -215,7 +215,7 @@ def test_detail_rejects_whitespace_equivalent_selected_headers_after_extraction(
         second_header,
     ]
     values = [
-        "상품매출",
+        "제품매출",
         "2026-06-30",
         "특관자A",
         "0",
@@ -251,7 +251,7 @@ def test_detail_rejects_whitespace_equivalent_selected_headers_after_extraction(
 
 def test_detail_allows_duplicate_source_running_balance_headers_because_they_are_ignored():
     headers = ["계정명", "날짜", "거래처명", "차변", "대변", "잔액", "잔 액"]
-    values = ["상품매출", "2026-06-30", "특관자A", "0", "100", "999", "888"]
+    values = ["제품매출", "2026-06-30", "특관자A", "0", "100", "999", "888"]
     normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
     extracted = extract_current_period(normalized, Period(2026, 2))
 
@@ -268,7 +268,7 @@ def test_detail_allows_duplicate_source_running_balance_headers_because_they_are
 
 def test_detail_allows_unique_and_irrelevant_deduplicated_source_headers():
     headers = ["계정명", "날짜", "거래처명", "적요", "차변", "대변", "비고", "비고"]
-    values = ["상품매출", "2026-06-30", "특관자A", "normal", "0", "100", "", ""]
+    values = ["제품매출", "2026-06-30", "특관자A", "normal", "0", "100", "", ""]
     normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
     extracted = extract_current_period(normalized, Period(2026, 2))
 
@@ -286,7 +286,7 @@ def test_detail_allows_unique_and_irrelevant_deduplicated_source_headers():
 
 def test_detail_allows_whitespace_equivalent_irrelevant_source_headers():
     headers = ["계정명", "날짜", "거래처명", "적요", "차변", "대변", "비고", "비 고"]
-    values = ["상품매출", "2026-06-30", "특관자A", "normal", "0", "100", "one", "two"]
+    values = ["제품매출", "2026-06-30", "특관자A", "normal", "0", "100", "one", "two"]
     normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
     extracted = extract_current_period(normalized, Period(2026, 2))
 
@@ -306,14 +306,14 @@ def test_detail_allows_whitespace_equivalent_irrelevant_source_headers():
 
 def test_normalized_unique_source_headers_do_not_set_duplicate_contract():
     headers = ["계정명", "날짜", "거래처명", "적요", "차변", "대변"]
-    values = ["상품매출", "2026-06-30", "특관자A", "normal", "0", "100"]
+    values = ["제품매출", "2026-06-30", "특관자A", "normal", "0", "100"]
     normalized = excel_io.normalized_frame(pd.DataFrame([headers, values]))
 
     assert excel_io.DEDUPLICATED_HEADER_BASES_ATTR not in normalized.attrs
 
 
 def test_detail_excludes_non_related_parties():
-    ledger = _ledger([("2026-05-01", "상품매출", "related")])
+    ledger = _ledger([("2026-05-01", "제품매출", "related")])
     general = ledger.copy()
     general.loc[0, "거래처명"] = "일반거래처"
     combined = pd.concat([ledger, general], ignore_index=True)
@@ -364,8 +364,8 @@ def test_detail_maps_lending_row_to_existing_b_through_p_contract():
 def test_detail_ignores_source_running_balance_and_calculates_group_balance():
     ledger = _ledger(
         [
-            ("2026-01-03", "상품매출", "first sale"),
-            ("2026-06-30", "상품매출", "second sale"),
+            ("2026-01-03", "제품매출", "first sale"),
+            ("2026-06-30", "제품매출", "second sale"),
         ]
     )
     ledger.loc[:, ["차변", "대변", "잔액"]] = [
@@ -479,10 +479,10 @@ def test_detail_adds_liability_opening_to_credit_and_uses_credit_nature_balance(
 def test_detail_orders_rows_into_contiguous_company_blocks():
     ledger = _ledger(
         [
-            ("2026-01-03", "상품매출", "A sale"),
-            ("2026-02-01", "상품매출", "B sale"),
+            ("2026-01-03", "제품매출", "A sale"),
+            ("2026-02-01", "제품매출", "B sale"),
             ("2026-03-01", "미지급금", "A payable"),
-            ("2026-04-01", "상품매출", "A sale 2"),
+            ("2026-04-01", "제품매출", "A sale 2"),
         ]
     )
     ledger.loc[1, "거래처명"] = "특관자B"
@@ -606,17 +606,17 @@ def test_detail_row_categories_follow_aggregate_row_eligibility_rules():
 
     by_description = {row.description: row for row in rows}
     assert by_description["전기 이월"].funding is None
-    assert by_description["대여금 상환"].funding is None
+    assert by_description["대여금 상환"].funding == "자금대여상환"
     assert by_description["충당금"].funding is None
     assert by_description["당기 신규 대여"].funding == "자금대여"
-    assert by_description["전대 차감"].income_expense is None
-    assert by_description["전대 차감"].bucket is None
+    assert by_description["전대 차감"].income_expense == "비용"
+    assert by_description["전대 차감"].bucket == "기타비용"
     assert by_description["정상 비용"].income_expense == "비용"
     assert by_description["정상 비용"].bucket == "기타비용"
 
 
 def test_detail_fails_closed_when_given_out_of_period_row():
-    ledger = _ledger([("2026-07-01", "상품매출", "outside")])
+    ledger = _ledger([("2026-07-01", "제품매출", "outside")])
 
     with pytest.raises(StatementDetailError, match="기간 밖"):
         build_statement_detail(
@@ -628,7 +628,7 @@ def test_detail_fails_closed_when_given_out_of_period_row():
 
 
 def test_detail_fails_closed_when_required_column_is_missing():
-    ledger = _ledger([("2026-06-30", "상품매출", "missing")]).drop(columns=["차변"])
+    ledger = _ledger([("2026-06-30", "제품매출", "missing")]).drop(columns=["차변"])
 
     with pytest.raises(StatementDetailError, match="필수 열"):
         build_statement_detail(
@@ -649,7 +649,7 @@ def test_detail_fails_closed_when_required_column_is_missing():
     ],
 )
 def test_detail_fails_closed_when_period_metadata_entry_is_malformed(metadata):
-    ledger = _ledger([("2026-06-30", "상품매출", "do not leak this description")])
+    ledger = _ledger([("2026-06-30", "제품매출", "do not leak this description")])
     ledger.attrs["period_year_months"] = [metadata]
 
     with pytest.raises(StatementDetailError, match="기간 메타데이터") as exc_info:

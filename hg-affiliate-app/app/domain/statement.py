@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -47,6 +47,13 @@ COLUMNS: list[tuple[str, str]] = [
     ("대손충당금", "allowance_end"),
     ("대손상각비", "allowance_expense"),
     ("자금대여", "fund_lending"),
+    ("차입금", "borrowing"),
+    ("전기말 대손충당금", "allowance_opening"),
+    ("자금대여상환", "fund_collection"),
+    ("차입", "fund_borrowing"),
+    ("차입상환", "fund_repayment"),
+    ("투자전환사채취득", "fund_investment"),
+    ("투자전환사채처분", "fund_disposal"),
 ]
 
 _HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
@@ -68,6 +75,7 @@ def build_statement(
     result: AggregateResult,
     period: Period,
     detail_rows: Sequence[StatementDetailRow],
+    template_path: Path | None = None,
 ) -> tuple[Workbook, list[str]]:
     """당기 특관자 명세서 워크북을 만든다.
 
@@ -75,9 +83,143 @@ def build_statement(
         (workbook, unmatched) — 고정 템플릿 사용 시 템플릿 거래처에 매칭되지 못한
         정규명 목록(수기 추가 검토). 폴백 경로에선 빈 목록.
     """
+    if template_path is not None:
+        return _build_revised(result, period, detail_rows, template_path), []
     if TEMPLATE_PATH.exists():
         return fill_statement_template(TEMPLATE_PATH, result, period, detail_rows)
     return _build_legacy(result, period, detail_rows), []
+
+
+def _build_revised(result, period, detail_rows, template_path):
+    """2026-3Q 규칙: 모든 버킷/거래처를 표시하고 전기 양식은 참고로 보존."""
+    wb = _build_legacy(result, period, detail_rows)
+    del wb['특관자']
+    del wb['_집계']
+    ws = wb.create_sheet('특관자', 0)
+    ws.append(['HLB글로벌(주) 특수관계자 명세서'])
+    ws.append([period.label])
+    ws['J2'] = '단위: 원'
+    ws.merge_cells('A1:J1')
+    ws.merge_cells('A2:H2')
+    ws['A1'].font = Font(size=16, bold=True, color='1F4E79')
+    prior = load_workbook(template_path, data_only=True)
+    groups = {}
+    if '특관자' in prior.sheetnames:
+        original = prior['특관자']
+        for row in original.iter_rows(min_col=2, max_col=3):
+            group, name = (c.value for c in row)
+            if isinstance(group, str) and isinstance(name, str) and ('기업' in group or '특수관계' in group):
+                from ..normalize import _norm_key
+                groups[_norm_key(name)] = group
+        ref = wb.create_sheet('전기_참고')
+        ref.append(['제공된 전기 명세서 참고값 — 당기 집계에 포함하지 않음'])
+        from copy import copy
+        for row in original.iter_rows():
+            for cell in row:
+                if cell.value is not None:
+                    value = '원본 수식 오류(확인 필요)' if cell.data_type == 'e' else cell.value
+                    target = ref.cell(cell.row + 2, cell.column, value)
+                    target.font = copy(cell.font)
+                    target.fill = copy(cell.fill)
+                    target.border = copy(cell.border)
+                    target.alignment = copy(cell.alignment)
+                    target.number_format = cell.number_format
+        for key, dim in original.column_dimensions.items():
+            ref.column_dimensions[key].width = dim.width
+        for column in range(4, 27):
+            ref.column_dimensions[get_column_letter(column)].width = 20
+        ref.column_dimensions['C'].width = 35
+        ref.column_dimensions['R'].width = 35
+        ref.sheet_view.showGridLines = False
+        for row in ref:
+            for cell in row:
+                cell.alignment = Alignment(vertical='center', wrap_text=False)
+        for merged in original.merged_cells.ranges:
+            ref.merge_cells(start_row=merged.min_row+2, end_row=merged.max_row+2,
+                            start_column=merged.min_col, end_column=merged.max_col)
+    prior.close()
+    sections = [
+        ('38.1 특수관계자와의 주요 거래내역',
+         [('매출', 'sales'), ('기타수익', 'sales_other'), ('매입', 'purchase'), ('기타비용', 'purchase_other')]),
+        ('38.2 특수관계자와의 채권·채무 잔액',
+         [('매출채권', 'ar'), ('대여금', 'loan'), ('기타채권', 'other_ar'), ('투자전환사채', 'cb_invest'),
+          ('매입채무', 'ap'), ('기타채무', 'other_ap'), ('차입금', 'borrowing'), ('발행전환사채', 'cb_issued')]),
+        ('38.3 특수관계자 채권 관련 대손충당금',
+         [('전기말 충당금', 'allowance_opening'), ('당기말 충당금', 'allowance_end'), ('당기 대손상각비', 'allowance_expense')]),
+        ('38.4 특수관계자와의 자금거래 내역',
+         [('자금대여', 'fund_lending'), ('자금대여상환', 'fund_collection'), ('차입', 'fund_borrowing'),
+          ('차입상환', 'fund_repayment'), ('투자전환사채취득', 'fund_investment'), ('투자전환사채처분', 'fund_disposal')]),
+    ]
+    source_columns = {attr: get_column_letter(i) for i, (_, attr) in enumerate(COLUMNS, 2)}
+    from ..normalize import _norm_key
+    for title, columns in sections:
+        ws.append([])
+        ws.append([title])
+        ws.cell(ws.max_row, 1).font = Font(size=12, bold=True, color='1F4E79')
+        if title.startswith('38.3'):
+            ws.append(['당기말 충당금 = 전기잔액 + 당기 대변 − 차변 / 대손상각비 = 당기 차변 − 대변'])
+        if title.startswith('38.4'):
+            ws.append(['당기 거래만 집계(이월 제외). 취득·대여와 회수·상환을 각각 표시.'])
+        ws.append(['구분', '특수관계자명'] + [label for label, _ in columns])
+        for cell in ws[ws.max_row][:len(columns) + 2]:
+            _style_header(cell)
+        first = ws.max_row + 1
+        names = [name for name, agg in sorted(result.by_canonical.items())
+                 if any(getattr(agg, attr) for _, attr in columns)]
+        for name in names:
+            r = ws.max_row + 1
+            ws.cell(r, 1, groups.get(_norm_key(name), '특수관계자'))
+            ws.cell(r, 2, name)
+            for c, (_, attr) in enumerate(columns, 3):
+                letter = source_columns[attr]
+                ws.cell(r, c, f'=SUMIF(\'39.2\'!$A$4:$A${max(4, len(result.by_canonical)+3)},B{r},\'39.2\'!${letter}$4:${letter}${max(4, len(result.by_canonical)+3)})')
+                ws.cell(r, c).number_format = '#,##0;[Red](#,##0);"-"'
+        if names:
+            last = ws.max_row
+            r = last + 1
+            ws.cell(r, 2, '합계')
+            for c in range(3, len(columns) + 3):
+                letter = get_column_letter(c)
+                ws.cell(r, c, f'=SUM({letter}{first}:{letter}{last})').number_format = '#,##0;[Red](#,##0);"-"'
+        else:
+            ws.append(['해당 거래 없음'])
+    ws.append([])
+    ws.append(['38.5 주요 경영진 보상'])
+    ws.append(['급여·퇴직급여 자료 미제공 — 별도 확인 필요'])
+    ws.column_dimensions['A'].width = 19
+    ws.column_dimensions['B'].width = 35
+    for c in range(3, 11):
+        ws.column_dimensions[get_column_letter(c)].width = 22
+    ws.freeze_panes = 'C3'
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.orientation = 'landscape'
+    ws.page_setup.paperSize = ws.PAPERSIZE_A3
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_options.horizontalCentered = True
+    ws.print_area = f'A1:J{ws.max_row}'
+    detail = wb['39.1']
+    for c in range(2, 17):
+        detail.column_dimensions[get_column_letter(c)].width = 18
+    for c in ('H', 'J', 'L', 'M'):
+        detail.column_dimensions[c].width = 32
+    detail.column_dimensions['J'].width = 60
+    for r in range(16, detail.max_row + 1):
+        detail.cell(r, 10).alignment = Alignment(wrap_text=True, vertical='center')
+        detail.row_dimensions[r].height = 32
+    detail.freeze_panes = 'N16'
+    detail.auto_filter.ref = f'B15:P{max(16, detail.max_row)}'
+    for row in detail.iter_rows(min_row=16, min_col=14, max_col=16):
+        for cell in row:
+            cell.number_format = '#,##0;[Red](#,##0);"-"'
+    for c in range(2, len(COLUMNS) + 2):
+        wb['39.2'].column_dimensions[get_column_letter(c)].width = 23
+    wb['39.2'].column_dimensions['A'].width = 35
+    wb['39.2'].freeze_panes = 'B4'
+    wb['39.2'].sheet_view.showGridLines = False
+    wb.active = 0
+    return wb
 
 
 def _build_legacy(

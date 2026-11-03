@@ -124,7 +124,7 @@ def _balance_long_frame(path: Path | None) -> pd.DataFrame | None:
             rows.append(pd.DataFrame({
                 "거래처": df[pcol].astype(str),
                 "거래처코드": partner_codes,
-                "계정과목": "대손충당금",
+                "계정과목": f"대손충당금({str(sname).strip()})",
                 "금액": df[allow_col],
             }))
 
@@ -382,7 +382,11 @@ def run_pipeline(
         f"당기_특관자_명세서_{period.year}_{period.quarter}Q.xlsx"
     )
     try:
-        statement_wb, stmt_unmatched = build_statement(result, period, detail_rows)
+        template = slot_paths.get('prev_statement')
+        if template is not None:
+            statement_wb, stmt_unmatched = build_statement(result, period, detail_rows, template_path=template)
+        else:
+            statement_wb, stmt_unmatched = build_statement(result, period, detail_rows)
         for canon in stmt_unmatched:
             errors.add(
                 "템플릿 미반영", canon,

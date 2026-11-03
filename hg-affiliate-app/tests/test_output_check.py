@@ -77,3 +77,15 @@ def test_actual_formula_with_error_token_fails_static_scan(tmp_path):
         loaded.close()
 
     assert output_check._scan_formulas_static(path) == "Sheet!A1"
+
+
+def test_successful_recalculation_is_saved_for_the_recipient(tmp_path, monkeypatch):
+    path = tmp_path / 'output.xlsx'
+    _workbook(path, lambda ws: ws.__setitem__('A1', '=1+2'))
+    recalced = tmp_path / 'recalculated' / 'output.xlsx'
+    recalced.parent.mkdir()
+    _workbook(recalced, lambda ws: ws.__setitem__('A1', 3))
+    monkeypatch.setattr(output_check, '_find_soffice', lambda: 'soffice')
+    monkeypatch.setattr(output_check, '_recalc_with_libreoffice', lambda *_: recalced)
+    assert output_check.verify_output(path).ok
+    assert load_workbook(path, data_only=True).active['A1'].value == 3

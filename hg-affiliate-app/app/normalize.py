@@ -61,12 +61,18 @@ def seed_from_name_pivot(path: Path | None) -> dict[str, str]:
 
     cur: str | None = None
     for ws in wb.worksheets:
+        # 피벗 캐시 복구용 원시 행은 대표명/별칭의 들여쓰기 표가 아니다.
+        if ws.title.startswith('_복구_'):
+            continue
+        cur = None
         for row in ws.iter_rows(min_col=1, max_col=1):
             cell = row[0]
             val = cell.value
             if val is None or not str(val).strip():
                 continue
             name = str(val).strip()
+            if name in {'거래처', '거래처명', '상호', '대표명', '정규명'}:
+                continue
             if is_aggregate_label(name):  # 총합계/행 레이블 등 피벗 산출물 제외
                 continue
             indent = 0
