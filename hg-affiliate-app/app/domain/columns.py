@@ -207,7 +207,9 @@ def reclassify_shared_expense(
     account: object, description: object, debit: float, credit: float,
 ) -> tuple[float, float, bool]:
     """공동경비 음수 지급수수료는 글로벌의 기타수익: 차변 → 양수 대변."""
-    if match_bucket(str(account), ['지급수수료']) and '공동경비' in str(description) and debit < 0:
+    # 적요 원문은 보존하고 매칭할 때만 공백(줄바꿈·탭·NBSP 포함)을 제거한다.
+    description_key = re.sub(r"\s+", "", str(description))
+    if match_bucket(str(account), ['지급수수료']) and '공동경비' in description_key and debit < 0:
         return 0.0, credit - debit, True
     return debit, credit, False
 

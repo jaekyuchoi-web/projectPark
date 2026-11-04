@@ -12,7 +12,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import copy
+from datetime import date, datetime
+from math import ceil
 from pathlib import Path
+from unicodedata import east_asian_width
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -92,7 +96,7 @@ def build_statement(
 
 def _build_revised(result, period, detail_rows, template_path):
     """2026-3Q 규칙: 모든 버킷/거래처를 표시하고 전기 양식은 참고로 보존."""
-    wb = _build_legacy(result, period, detail_rows)
+    wb = _build_legacy(result, period, detail_rows, detail_header_row=2)
     del wb['특관자']
     del wb['_집계']
     ws = wb.create_sheet('특관자', 0)
@@ -200,32 +204,57 @@ def _build_revised(result, period, detail_rows, template_path):
     ws.print_options.horizontalCentered = True
     ws.print_area = f'A1:J{ws.max_row}'
     detail = wb['39.1']
-    for c in range(2, 17):
-        detail.column_dimensions[get_column_letter(c)].width = 18
-    for c in ('H', 'J', 'L', 'M'):
-        detail.column_dimensions[c].width = 32
-    detail.column_dimensions['J'].width = 60
-    for r in range(16, detail.max_row + 1):
-        detail.cell(r, 10).alignment = Alignment(wrap_text=True, vertical='center')
-        detail.row_dimensions[r].height = 32
-    detail.freeze_panes = 'N16'
-    detail.auto_filter.ref = f'B15:P{max(16, detail.max_row)}'
-    for row in detail.iter_rows(min_row=16, min_col=14, max_col=16):
+    detail.auto_filter.ref = f'B2:P{max(3, detail.max_row)}'
+    for row in detail.iter_rows(min_row=3, min_col=14, max_col=16):
         for cell in row:
             cell.number_format = '#,##0;[Red](#,##0);"-"'
-    for c in range(2, len(COLUMNS) + 2):
-        wb['39.2'].column_dimensions[get_column_letter(c)].width = 23
-    wb['39.2'].column_dimensions['A'].width = 35
-    wb['39.2'].freeze_panes = 'B4'
+    _fit_table_cells(detail, header_row=2, first_column=2)
+    _fit_table_cells(wb['39.2'], header_row=3, first_column=1)
     wb['39.2'].sheet_view.showGridLines = False
     wb.active = 0
     return wb
+
+
+def _fit_table_cells(ws, header_row: int, first_column: int) -> None:
+    """한글 표시 폭과 줄바꿈을 반영해 표의 열 너비·행 높이를 맞춘다."""
+    def displayed(cell):
+        if cell.value is None:
+            return ''
+        if cell.data_type == 'f':
+            return '0' * 18  # 잔액 수식의 숫자 표시 공간
+        if isinstance(cell.value, (datetime, date)):
+            return cell.value.strftime('%Y-%m-%d')
+        if isinstance(cell.value, (int, float)):
+            return f'{cell.value:,.0f}'
+        return str(cell.value)
+
+    def width(text):
+        return sum(2 if east_asian_width(c) in ('W', 'F') else 1 for c in text)
+
+    ws.freeze_panes = None
+    for column in range(first_column, ws.max_column + 1):
+        cells = list(ws.iter_cols(min_col=column, max_col=column, min_row=header_row))[0]
+        widest = max((width(line) for cell in cells for line in displayed(cell).split('\n')), default=0)
+        limit = 80 if ws.title == '39.1' and column == 10 else 48
+        ws.column_dimensions[get_column_letter(column)].width = min(limit, max(12, widest + 4))
+    for row in ws.iter_rows(min_row=header_row, min_col=first_column):
+        height = 20
+        for cell in row:
+            alignment = copy(cell.alignment)
+            alignment.wrap_text = True
+            alignment.vertical = 'center'
+            cell.alignment = alignment
+            available = ws.column_dimensions[cell.column_letter].width - 4
+            lines = sum(max(1, ceil(width(line) / available)) for line in displayed(cell).split('\n'))
+            height = max(height, lines * ((cell.font.sz or 11) + 4) + 5)
+        ws.row_dimensions[row[0].row].height = height
 
 
 def _build_legacy(
     result: AggregateResult,
     period: Period,
     detail_rows: Sequence[StatementDetailRow],
+    detail_header_row: int = 15,
 ) -> Workbook:
     wb = Workbook()
 
@@ -247,10 +276,10 @@ def _build_legacy(
         "회사명(본지점합산)", "차변", "대변", "잔액",
     ]
     for column, header in enumerate(headers, start=2):
-        _style_header(note_ws.cell(row=15, column=column, value=header))
-    group_first_row = 16
+        _style_header(note_ws.cell(row=detail_header_row, column=column, value=header))
+    group_first_row = detail_header_row + 1
     previous_group_key: tuple[str, str, str] | None = None
-    for row_number, detail in enumerate(detail_rows, start=16):
+    for row_number, detail in enumerate(detail_rows, start=detail_header_row + 1):
         current_group_key = detail_group_key(detail)
         if current_group_key != previous_group_key:
             group_first_row = row_number
