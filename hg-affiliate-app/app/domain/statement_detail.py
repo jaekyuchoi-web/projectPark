@@ -138,6 +138,7 @@ def _classify(
     debit: float,
     credit: float,
     row_values: list[object],
+    shared_income: bool = False,
 ) -> tuple[str | None, str | None, str | None, str | None, str | None]:
     name = str(account)
     sales_purchase = None
@@ -146,7 +147,9 @@ def _classify(
     income_expense = None
     bucket = None
 
-    if C.match_bucket(name, C.SALES_KEYWORDS):
+    if shared_income:
+        income_expense, bucket = "기타수익", "기타수익"
+    elif C.match_bucket(name, C.SALES_KEYWORDS):
         sales_purchase, bucket = "매출", "매출"
     elif C.match_bucket(name, C.INTEREST_INCOME_KEYWORDS):
         income_expense, bucket = "이자수익", "이자수익"
@@ -193,11 +196,12 @@ def _account_key(value: object) -> str:
     return re.sub(r"[\s\u3000]", "", _clean_text(value)).casefold()
 
 
-def detail_group_key(row: StatementDetailRow) -> tuple[str, str]:
-    """Return the contiguous 39.1 balance group identity: (company, account)."""
+def detail_group_key(row: StatementDetailRow) -> tuple[str, str, str]:
+    """동일 계정의 공동경비 수익과 일반 비용을 별도 잔액 그룹으로 계산."""
     return (
         _clean_text(row.canonical_name),
         _account_key(row.account_name),
+        row.bucket or '',
     )
 
 
@@ -271,7 +275,7 @@ def _opening_rows(
         positions.get(partner_code_col) if partner_code_col else None
     )
 
-    by_group: dict[tuple[str, str], list[StatementDetailRow]] = {}
+    by_group: dict[tuple[str, str, str], list[StatementDetailRow]] = {}
     for source in C.array_rows(prev_balance):
         partner_name = _clean_text(source[partner_position])
         canonical_name = mapping.get(partner_name)
@@ -433,7 +437,7 @@ def build_statement_detail(
     account_codes = _ledger_opening_account_codes(
         ledger, account_position, account_code_position
     )
-    grouped: dict[tuple[str, str], list[StatementDetailRow]] = {}
+    grouped: dict[tuple[str, str, str], list[StatementDetailRow]] = {}
     for opening in _opening_rows(
         prev_balance, mapping, canonical, account_codes
     ):
@@ -455,8 +459,12 @@ def build_statement_detail(
 
         debit = C.to_number(source[debit_position])
         credit = C.to_number(source[credit_position])
+        debit, credit, shared_income = C.reclassify_shared_expense(
+            source[account_position], source[description_position] if description_position is not None else '',
+            debit, credit,
+        )
         classification = _classify(
-            source[account_position], debit, credit, source
+            source[account_position], debit, credit, source, shared_income=shared_income,
         )
         row = StatementDetailRow(
             *classification,

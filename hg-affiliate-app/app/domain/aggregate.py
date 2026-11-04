@@ -89,6 +89,7 @@ def aggregate_ledger(
     acc_col = C.resolve_column(ledger, "account")
     debit_col = C.resolve_column(ledger, "debit")
     credit_col = C.resolve_column(ledger, "credit")
+    description_col = C.resolve_column(ledger, "description")
     if acc_col is None or (debit_col is None and credit_col is None):
         errors.add("형식 경고", "당기 원장", "계정/차변/대변 컬럼을 인식하지 못함",
                    "헤더에 계정과목·차변·대변 컬럼명이 포함되도록 정리해 주세요.")
@@ -105,10 +106,15 @@ def aggregate_ledger(
         acc = str(C.array_row_value(row, positions, acc_col, ""))
         debit = C.to_number(C.array_row_value(row, positions, debit_col))
         credit = C.to_number(C.array_row_value(row, positions, credit_col))
+        debit, credit, shared_income = C.reclassify_shared_expense(
+            acc, C.array_row_value(row, positions, description_col, ''), debit, credit,
+        )
         agg = result.get(canon)
 
         # 매출 (대변-차변)
-        if C.match_bucket(acc, C.SALES_KEYWORDS):
+        if shared_income:
+            agg.sales_other += credit - debit
+        elif C.match_bucket(acc, C.SALES_KEYWORDS):
             agg.sales += credit - debit
         # 기타수익 = 이자수익·수입임대료·잡이익
         elif C.match_bucket(acc, C.OTHER_INCOME_KEYWORDS):

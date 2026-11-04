@@ -20,6 +20,7 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     "credit": ["대변", "대변금액", "credit", "입금"],
     "amount": ["금액", "잔액", "기말잔액", "당기잔액", "balance", "amount"],
     "date": ["날짜", "일자", "전표일자", "회계일자", "발생일자", "거래일자", "거래일", "전기일자", "date"],
+    "description": ["적요", "적요란"],
 }
 
 
@@ -200,6 +201,15 @@ def is_purchase_other_eligible(account: object, debit: float, credit: float) -> 
     if not match_bucket(name, OTHER_EXPENSE_KEYWORDS):
         return False
     return True
+
+
+def reclassify_shared_expense(
+    account: object, description: object, debit: float, credit: float,
+) -> tuple[float, float, bool]:
+    """공동경비 음수 지급수수료는 글로벌의 기타수익: 차변 → 양수 대변."""
+    if match_bucket(str(account), ['지급수수료']) and '공동경비' in str(description) and debit < 0:
+        return 0.0, credit - debit, True
+    return debit, credit, False
 
 
 def is_fund_lending_eligible(
